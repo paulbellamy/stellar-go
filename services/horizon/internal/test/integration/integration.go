@@ -5,10 +5,12 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"sync"
 	"syscall"
@@ -24,6 +26,7 @@ import (
 	proto "github.com/stellar/go/protocols/horizon"
 	horizon "github.com/stellar/go/services/horizon/internal"
 	"github.com/stellar/go/support/db/dbtest"
+	"github.com/stellar/go/support/errors"
 	"github.com/stellar/go/txnbuild"
 	"github.com/stellar/go/xdr"
 )
@@ -57,13 +60,43 @@ type Test struct {
 	passPhrase    string
 }
 
-func NewTestForRemoteHorizon(t *testing.T, horizonURL string, passPhrase string, masterKey *keypair.Full) *Test {
-	return &Test{
-		t:          t,
-		hclient:    &sdk.Client{HorizonURL: horizonURL},
-		masterKey:  masterKey,
-		passPhrase: passPhrase,
+func NewTestForRemoteHorizon(t *testing.T, config Config, horizonURL, passPhrase, masterKeySeed, postgresURL string) (*Test, error) {
+	if passPhrase == "" {
+		passPhrase = StandaloneNetworkPassphrase
 	}
+
+	// If we have a custom master key seed, parse that.
+	var masterKey *keypair.Full
+	var err error
+	if masterKeySeed != "" {
+		masterKey, err = keypair.ParseFull(masterKeySeed)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid master key seed")
+		}
+	}
+
+	if postgresURL == "" {
+		postgresURL = (&url.URL{
+			Scheme: "postgres",
+			User:   url.UserPassword("postgres", stellarCorePostgresPassword),
+			Host:   fmt.Sprintf("localhost:%d", stellarCorePostgresPort),
+			Path:   "/horizon",
+		}).String()
+	}
+
+	horizonConfig, _ := horizon.Flags()
+	return &Test{
+		t: t,
+		config: Config{
+			PostgresURL:           postgresURL,
+			ProtocolVersion:       config.ProtocolVersion,
+			SkipContainerCreation: true,
+		},
+		horizonConfig: *horizonConfig,
+		hclient:       &sdk.Client{HorizonURL: horizonURL},
+		masterKey:     masterKey,
+		passPhrase:    passPhrase,
+	}, nil
 }
 
 // NewTest starts a new environment for integration test at a given
@@ -73,8 +106,18 @@ func NewTestForRemoteHorizon(t *testing.T, horizonURL string, passPhrase string,
 //
 // Skips the test if HORIZON_INTEGRATION_TESTS env variable is not set.
 func NewTest(t *testing.T, config Config) *Test {
-	if os.Getenv("HORIZON_INTEGRATION_TESTS") == "" {
+	integrationUrl := os.Getenv("HORIZON_INTEGRATION_TESTS")
+	if integrationUrl == "" {
 		t.Skip("skipping integration test")
+	} else if ok, _ := regexp.MatchString("^https?://", integrationUrl); ok {
+		passPhrase := os.Getenv("HORIZON_INTEGRATION_TESTS_PASSPHRASE")
+		masterKeySeed := os.Getenv("HORIZON_INTEGRATION_TESTS_MASTER_KEY")
+		postgresURL := os.Getenv("HORIZON_INTEGRATION_TESTS_POSTGRES")
+		i, err := NewTestForRemoteHorizon(t, config, integrationUrl, passPhrase, masterKeySeed, postgresURL)
+		if err != nil {
+			t.Error(err)
+		}
+		return i
 	}
 
 	i := &Test{t: t, passPhrase: StandaloneNetworkPassphrase, config: config}
