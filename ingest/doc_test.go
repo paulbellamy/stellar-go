@@ -82,12 +82,13 @@ func Example_changes() {
 
 	sequence := uint32(3)
 
-	err = backend.PrepareRange(ledgerbackend.SingleLedgerRange(sequence))
+	ctx := context.Background()
+	err = backend.PrepareRange(ctx, ledgerbackend.SingleLedgerRange(sequence))
 	if err != nil {
 		panic(err)
 	}
 
-	changeReader, err := NewLedgerChangeReader(backend, networkPassphrase, sequence)
+	changeReader, err := NewLedgerChangeReader(ctx, backend, networkPassphrase, sequence)
 	if err != nil {
 		panic(err)
 	}

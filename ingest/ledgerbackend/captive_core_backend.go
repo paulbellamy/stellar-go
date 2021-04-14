@@ -285,7 +285,7 @@ func (c *CaptiveStellarCore) openOnlineReplaySubprocess(ctx context.Context, fro
 
 	if c.ledgerHashStore != nil {
 		var exists bool
-		ledgerHash, exists, err = c.ledgerHashStore.GetLedgerHash(nextLedger - 1)
+		ledgerHash, exists, err = c.ledgerHashStore.GetLedgerHash(ctx, nextLedger-1)
 		if err != nil {
 			return errors.Wrapf(err, "error trying to read ledger hash %d", nextLedger-1)
 		}
@@ -338,7 +338,7 @@ func (c *CaptiveStellarCore) runFromParams(ctx context.Context, from uint32) (ru
 	runFrom = from - 1
 	if c.ledgerHashStore != nil {
 		var exists bool
-		ledgerHash, exists, err = c.ledgerHashStore.GetLedgerHash(runFrom)
+		ledgerHash, exists, err = c.ledgerHashStore.GetLedgerHash(ctx, runFrom)
 		if err != nil {
 			err = errors.Wrapf(err, "error trying to read ledger hash %d", runFrom)
 			return
@@ -393,8 +393,7 @@ func (c *CaptiveStellarCore) startPreparingRange(ctx context.Context, ledgerRang
 //     it normally (including connecting to the Stellar network).
 // Please note that using a BoundedRange, currently, requires a full-trust on
 // history archive. This issue is being fixed in Stellar-Core.
-func (c *CaptiveStellarCore) PrepareRange(ledgerRange Range) error {
-	ctx := context.TODO()
+func (c *CaptiveStellarCore) PrepareRange(ctx context.Context, ledgerRange Range) error {
 	if alreadyPrepared, err := c.startPreparingRange(ctx, ledgerRange); err != nil {
 		return errors.Wrap(err, "error starting prepare range")
 	} else if alreadyPrepared {
@@ -403,7 +402,7 @@ func (c *CaptiveStellarCore) PrepareRange(ledgerRange Range) error {
 
 	old := c.isBlocking()
 	c.setBlocking(true)
-	_, _, err := c.GetLedger(ledgerRange.from)
+	_, _, err := c.GetLedger(ctx, ledgerRange.from)
 	c.setBlocking(old)
 
 	if err != nil {
@@ -414,7 +413,7 @@ func (c *CaptiveStellarCore) PrepareRange(ledgerRange Range) error {
 }
 
 // IsPrepared returns true if a given ledgerRange is prepared.
-func (c *CaptiveStellarCore) IsPrepared(ledgerRange Range) (bool, error) {
+func (c *CaptiveStellarCore) IsPrepared(ctx context.Context, ledgerRange Range) (bool, error) {
 	c.stellarCoreLock.RLock()
 	defer c.stellarCoreLock.RUnlock()
 
@@ -459,10 +458,10 @@ func (c *CaptiveStellarCore) isPrepared(ledgerRange Range) bool {
 // available in the backend (even for UnboundedRange).
 // Please note that requesting a ledger sequence far after current ledger will
 // block the execution for a long time.
-func (c *CaptiveStellarCore) GetLedgerBlocking(sequence uint32) (xdr.LedgerCloseMeta, error) {
+func (c *CaptiveStellarCore) GetLedgerBlocking(ctx context.Context, sequence uint32) (xdr.LedgerCloseMeta, error) {
 	old := c.isBlocking()
 	c.setBlocking(true)
-	_, meta, err := c.GetLedger(sequence)
+	_, meta, err := c.GetLedger(ctx, sequence)
 	c.setBlocking(old)
 	return meta, err
 }
@@ -484,7 +483,7 @@ func (c *CaptiveStellarCore) GetLedgerBlocking(sequence uint32) (xdr.LedgerClose
 //   * UnboundedRange makes GetLedger non-blocking. The method will return with
 //     the first argument equal false.
 // This is done to provide maximum performance when streaming old ledgers.
-func (c *CaptiveStellarCore) GetLedger(sequence uint32) (bool, xdr.LedgerCloseMeta, error) {
+func (c *CaptiveStellarCore) GetLedger(ctx context.Context, sequence uint32) (bool, xdr.LedgerCloseMeta, error) {
 	c.stellarCoreLock.RLock()
 	defer c.stellarCoreLock.RUnlock()
 
@@ -610,7 +609,7 @@ func (c *CaptiveStellarCore) checkMetaPipeResult(result metaResult, ok bool) err
 // Note that for UnboundedRange the returned sequence number is not necessarily
 // the latest sequence closed by the network. It's always the last value available
 // in the backend.
-func (c *CaptiveStellarCore) GetLatestLedgerSequence() (uint32, error) {
+func (c *CaptiveStellarCore) GetLatestLedgerSequence(ctx context.Context) (uint32, error) {
 	c.stellarCoreLock.RLock()
 	defer c.stellarCoreLock.RUnlock()
 

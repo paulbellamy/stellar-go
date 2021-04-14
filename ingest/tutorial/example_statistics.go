@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 
@@ -19,6 +20,7 @@ func statistics() {
 	backend, err := backends.NewCaptive(config)
 	panicIf(err)
 	defer backend.Close()
+	ctx := context.Background()
 
 	// Prepare a range to be ingested:
 	var startingSeq uint32 = 2 // can't start with genesis ledger
@@ -26,7 +28,7 @@ func statistics() {
 
 	fmt.Printf("Preparing range (%d ledgers)...\n", ledgersToRead)
 	ledgerRange := backends.BoundedRange(startingSeq, startingSeq+ledgersToRead)
-	err = backend.PrepareRange(ledgerRange)
+	err = backend.PrepareRange(ctx, ledgerRange)
 	panicIf(err)
 
 	// These are the statistics that we're tracking.
@@ -36,7 +38,7 @@ func statistics() {
 	for seq := startingSeq; seq <= startingSeq+ledgersToRead; seq++ {
 		fmt.Printf("Processed ledger %d...\r", seq)
 
-		txReader, err := ingest.NewLedgerTransactionReader(
+		txReader, err := ingest.NewLedgerTransactionReader(ctx,
 			backend, config.NetworkPassphrase, seq)
 		panicIf(err)
 		defer txReader.Close()

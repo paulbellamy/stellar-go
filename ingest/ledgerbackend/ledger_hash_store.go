@@ -14,7 +14,7 @@ import (
 // source like history archives.
 type TrustedLedgerHashStore interface {
 	// GetLedgerHash returns the ledger hash for the given sequence number
-	GetLedgerHash(seq uint32) (string, bool, error)
+	GetLedgerHash(ctx context.Context, seq uint32) (string, bool, error)
 }
 
 // HorizonDBLedgerHashStore is a TrustedLedgerHashStore which uses horizon's db to look up ledger hashes
@@ -28,8 +28,7 @@ func NewHorizonDBLedgerHashStore(session *db.Session) TrustedLedgerHashStore {
 }
 
 // GetLedgerHash returns the ledger hash for the given sequence number
-func (h HorizonDBLedgerHashStore) GetLedgerHash(seq uint32) (string, bool, error) {
-	ctx := context.TODO()
+func (h HorizonDBLedgerHashStore) GetLedgerHash(ctx context.Context, seq uint32) (string, bool, error) {
 	sql := sq.Select("hl.ledger_hash").From("history_ledgers hl").
 		Limit(1).Where("sequence = ?", seq)
 
@@ -47,7 +46,7 @@ type MockLedgerHashStore struct {
 }
 
 // GetLedgerHash returns the ledger hash for the given sequence number
-func (m *MockLedgerHashStore) GetLedgerHash(seq uint32) (string, bool, error) {
-	args := m.Called(seq)
+func (m *MockLedgerHashStore) GetLedgerHash(ctx context.Context, seq uint32) (string, bool, error) {
+	args := m.Called(ctx, seq)
 	return args.Get(0).(string), args.Get(1).(bool), args.Error(2)
 }

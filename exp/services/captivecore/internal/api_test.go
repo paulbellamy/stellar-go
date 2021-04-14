@@ -47,7 +47,7 @@ func (s *APITestSuite) TestGetLedgerActiveRequestInvalid() {
 func (s *APITestSuite) runBeforeReady(prepareRangeErr error, f func()) {
 	waitChan := make(chan time.Time)
 	ledgerRange := ledgerbackend.UnboundedRange(63)
-	s.ledgerBackend.On("PrepareRange", ledgerRange).
+	s.ledgerBackend.On("PrepareRange", s.ctx, ledgerRange).
 		WaitUntil(waitChan).
 		Return(prepareRangeErr).Once()
 
@@ -77,7 +77,7 @@ func (s *APITestSuite) TestGetLedgerNotReady() {
 }
 
 func (s *APITestSuite) waitUntilReady(ledgerRange ledgerbackend.Range) {
-	s.ledgerBackend.On("PrepareRange", ledgerRange).
+	s.ledgerBackend.On("PrepareRange", s.ctx, ledgerRange).
 		Return(nil).Once()
 
 	response, err := s.api.PrepareRange(s.ctx, ledgerRange)
@@ -92,7 +92,7 @@ func (s *APITestSuite) TestLatestSeqError() {
 	s.waitUntilReady(ledgerbackend.UnboundedRange(63))
 
 	expectedErr := fmt.Errorf("test error")
-	s.ledgerBackend.On("GetLatestLedgerSequence").Return(uint32(0), expectedErr).Once()
+	s.ledgerBackend.On("GetLatestLedgerSequence", s.ctx).Return(uint32(0), expectedErr).Once()
 
 	_, err := s.api.GetLatestLedgerSequence(s.ctx)
 	s.Assert().Equal(err, expectedErr)
@@ -102,7 +102,7 @@ func (s *APITestSuite) TestGetLedgerError() {
 	s.waitUntilReady(ledgerbackend.UnboundedRange(63))
 
 	expectedErr := fmt.Errorf("test error")
-	s.ledgerBackend.On("GetLedger", uint32(64)).
+	s.ledgerBackend.On("GetLedger", s.ctx, uint32(64)).
 		Return(false, xdr.LedgerCloseMeta{}, expectedErr).Once()
 
 	_, err := s.api.GetLedger(s.ctx, 64)
@@ -113,7 +113,7 @@ func (s *APITestSuite) TestLatestSeqSucceeds() {
 	s.waitUntilReady(ledgerbackend.UnboundedRange(63))
 
 	expectedSeq := uint32(100)
-	s.ledgerBackend.On("GetLatestLedgerSequence").Return(expectedSeq, nil).Once()
+	s.ledgerBackend.On("GetLatestLedgerSequence", s.ctx).Return(expectedSeq, nil).Once()
 	seq, err := s.api.GetLatestLedgerSequence(s.ctx)
 	s.Assert().NoError(err)
 	s.Assert().Equal(seq, ledgerbackend.LatestLedgerSequenceResponse{Sequence: expectedSeq})
@@ -131,7 +131,7 @@ func (s *APITestSuite) TestGetLedgerSucceeds() {
 			},
 		},
 	}
-	s.ledgerBackend.On("GetLedger", uint32(64)).
+	s.ledgerBackend.On("GetLedger", s.ctx, uint32(64)).
 		Return(true, expectedLedger, nil).Once()
 	seq, err := s.api.GetLedger(s.ctx, 64)
 

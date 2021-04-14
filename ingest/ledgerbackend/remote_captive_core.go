@@ -127,9 +127,8 @@ func decodeResponse(response *http.Response, payload interface{}) error {
 // Note that for UnboundedRange the returned sequence number is not necessarily
 // the latest sequence closed by the network. It's always the last value available
 // in the backend.
-func (c RemoteCaptiveStellarCore) GetLatestLedgerSequence() (sequence uint32, err error) {
+func (c RemoteCaptiveStellarCore) GetLatestLedgerSequence(ctx context.Context) (sequence uint32, err error) {
 	// TODO: Should we use c.createContext here?
-	ctx := context.TODO()
 	u := *c.url
 	u.Path = path.Join(u.Path, "latest-sequence")
 
@@ -183,8 +182,8 @@ func (c RemoteCaptiveStellarCore) createContext(background context.Context) cont
 //     it normally (including connecting to the Stellar network).
 // Please note that using a BoundedRange, currently, requires a full-trust on
 // history archive. This issue is being fixed in Stellar-Core.
-func (c RemoteCaptiveStellarCore) PrepareRange(ledgerRange Range) error {
-	ctx := c.createContext(context.TODO())
+func (c RemoteCaptiveStellarCore) PrepareRange(ctx context.Context, ledgerRange Range) error {
+	ctx = c.createContext(ctx)
 	u := *c.url
 	u.Path = path.Join(u.Path, "prepare-range")
 	rangeBytes, err := json.Marshal(ledgerRange)
@@ -226,8 +225,8 @@ func (c RemoteCaptiveStellarCore) PrepareRange(ledgerRange Range) error {
 }
 
 // IsPrepared returns true if a given ledgerRange is prepared.
-func (c RemoteCaptiveStellarCore) IsPrepared(ledgerRange Range) (bool, error) {
-	ctx := c.createContext(context.TODO())
+func (c RemoteCaptiveStellarCore) IsPrepared(ctx context.Context, ledgerRange Range) (bool, error) {
+	ctx = c.createContext(ctx)
 
 	u := *c.url
 	u.Path = path.Join(u.Path, "prepare-range")
@@ -273,8 +272,8 @@ func (c RemoteCaptiveStellarCore) IsPrepared(ledgerRange Range) (bool, error) {
 //   * UnboundedRange makes GetLedger non-blocking. The method will return with
 //     the first argument equal false.
 // This is done to provide maximum performance when streaming old ledgers.
-func (c RemoteCaptiveStellarCore) GetLedger(sequence uint32) (bool, xdr.LedgerCloseMeta, error) {
-	ctx := c.createContext(context.TODO())
+func (c RemoteCaptiveStellarCore) GetLedger(ctx context.Context, sequence uint32) (bool, xdr.LedgerCloseMeta, error) {
+	ctx = c.createContext(ctx)
 
 	u := *c.url
 	u.Path = path.Join(u.Path, "ledger", strconv.FormatUint(uint64(sequence), 10))
@@ -296,9 +295,10 @@ func (c RemoteCaptiveStellarCore) GetLedger(sequence uint32) (bool, xdr.LedgerCl
 	return parsed.Present, xdr.LedgerCloseMeta(parsed.Ledger), nil
 }
 
-func (c RemoteCaptiveStellarCore) GetLedgerBlocking(sequence uint32) (xdr.LedgerCloseMeta, error) {
+func (c RemoteCaptiveStellarCore) GetLedgerBlocking(ctx context.Context, sequence uint32) (xdr.LedgerCloseMeta, error) {
+	ctx = c.createContext(ctx)
 	for {
-		exists, meta, err := c.GetLedger(sequence)
+		exists, meta, err := c.GetLedger(ctx, sequence)
 		if err != nil {
 			return xdr.LedgerCloseMeta{}, err
 		}

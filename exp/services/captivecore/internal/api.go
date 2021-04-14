@@ -66,7 +66,7 @@ func (c *CaptiveCoreAPI) Shutdown() {
 func (c *CaptiveCoreAPI) startPrepareRange(ctx context.Context, ledgerRange ledgerbackend.Range) {
 	defer c.wg.Done()
 
-	err := c.core.PrepareRange(ledgerRange)
+	err := c.core.PrepareRange(ctx, ledgerRange)
 
 	c.activeRequest.Lock()
 	defer c.activeRequest.Unlock()
@@ -151,7 +151,7 @@ func (c *CaptiveCoreAPI) GetLatestLedgerSequence(ctx context.Context) (ledgerbac
 		return ledgerbackend.LatestLedgerSequenceResponse{}, ErrPrepareRangeNotReady
 	}
 
-	seq, err := c.core.GetLatestLedgerSequence()
+	seq, err := c.core.GetLatestLedgerSequence(ctx)
 	if err != nil {
 		c.activeRequest.valid = false
 	}
@@ -170,7 +170,7 @@ func (c *CaptiveCoreAPI) GetLedger(ctx context.Context, sequence uint32) (ledger
 		return ledgerbackend.LedgerResponse{}, ErrPrepareRangeNotReady
 	}
 
-	present, ledger, err := c.core.GetLedger(sequence)
+	present, ledger, err := c.core.GetLedger(ctx, sequence)
 	if err != nil {
 		c.activeRequest.valid = false
 	}

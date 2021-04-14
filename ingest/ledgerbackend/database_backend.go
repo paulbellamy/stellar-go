@@ -44,8 +44,8 @@ func NewDatabaseBackendFromSession(session *db.Session, networkPassphrase string
 	return &DatabaseBackend{session: session, networkPassphrase: networkPassphrase}, nil
 }
 
-func (dbb *DatabaseBackend) PrepareRange(ledgerRange Range) error {
-	fromExists, _, err := dbb.GetLedger(ledgerRange.from)
+func (dbb *DatabaseBackend) PrepareRange(ctx context.Context, ledgerRange Range) error {
+	fromExists, _, err := dbb.GetLedger(ctx, ledgerRange.from)
 	if err != nil {
 		return errors.Wrap(err, "error getting ledger")
 	}
@@ -55,7 +55,7 @@ func (dbb *DatabaseBackend) PrepareRange(ledgerRange Range) error {
 	}
 
 	if ledgerRange.bounded {
-		toExists, _, err := dbb.GetLedger(ledgerRange.to)
+		toExists, _, err := dbb.GetLedger(ctx, ledgerRange.to)
 		if err != nil {
 			return errors.Wrap(err, "error getting ledger")
 		}
@@ -69,13 +69,12 @@ func (dbb *DatabaseBackend) PrepareRange(ledgerRange Range) error {
 }
 
 // IsPrepared returns true if a given ledgerRange is prepared.
-func (*DatabaseBackend) IsPrepared(ledgerRange Range) (bool, error) {
+func (*DatabaseBackend) IsPrepared(ctx context.Context, ledgerRange Range) (bool, error) {
 	return true, nil
 }
 
 // GetLatestLedgerSequence returns the most recent ledger sequence number present in the database.
-func (dbb *DatabaseBackend) GetLatestLedgerSequence() (uint32, error) {
-	ctx := context.TODO()
+func (dbb *DatabaseBackend) GetLatestLedgerSequence(ctx context.Context) (uint32, error) {
 	var ledger []ledgerHeader
 	err := dbb.session.SelectRaw(ctx, &ledger, latestLedgerSeqQuery)
 	if err != nil {
@@ -124,9 +123,9 @@ func sortByHash(transactions []xdr.TransactionEnvelope, passphrase string) error
 // available in the backend (even for UnaboundedRange).
 // Please note that requesting a ledger sequence far after current ledger will
 // block the execution for a long time.
-func (dbb *DatabaseBackend) GetLedgerBlocking(sequence uint32) (xdr.LedgerCloseMeta, error) {
+func (dbb *DatabaseBackend) GetLedgerBlocking(ctx context.Context, sequence uint32) (xdr.LedgerCloseMeta, error) {
 	for {
-		exists, meta, err := dbb.GetLedger(sequence)
+		exists, meta, err := dbb.GetLedger(ctx, sequence)
 		if err != nil {
 			return xdr.LedgerCloseMeta{}, err
 		}
@@ -141,8 +140,7 @@ func (dbb *DatabaseBackend) GetLedgerBlocking(sequence uint32) (xdr.LedgerCloseM
 
 // GetLedger returns the LedgerCloseMeta for the given ledger sequence number.
 // The first returned value is false when the ledger does not exist in the database.
-func (dbb *DatabaseBackend) GetLedger(sequence uint32) (bool, xdr.LedgerCloseMeta, error) {
-	ctx := context.TODO()
+func (dbb *DatabaseBackend) GetLedger(ctx context.Context, sequence uint32) (bool, xdr.LedgerCloseMeta, error) {
 	lcm := xdr.LedgerCloseMeta{
 		V0: &xdr.LedgerCloseMetaV0{},
 	}
