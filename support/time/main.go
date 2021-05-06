@@ -2,6 +2,7 @@ package time
 
 import (
 	"strconv"
+	"time"
 	goTime "time"
 )
 
@@ -26,6 +27,10 @@ func MillisFromSeconds(seconds int64) Millis {
 
 func (t Millis) increment(millisToAdd int64) Millis {
 	return Millis(int64(t) + millisToAdd)
+}
+
+func (t Millis) Add(d time.Duration) Millis {
+	return Millis(int64(t) + d.Milliseconds())
 }
 
 // IsNil returns true if the timeMillis has not been initialized to a date other then 0 from epoch

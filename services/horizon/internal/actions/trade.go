@@ -358,8 +358,7 @@ func (handler GetTradeAggregationsHandler) fetchRecords(ctx context.Context, his
 		}
 	}
 
-	var records []history.TradeAggregation
-	err = historyQ.Select(ctx, &records, tradeAggregationsQ.GetSql())
+	records, err := tradeAggregationsQ.Select(ctx, historyQ)
 	if err != nil {
 		return nil, err
 	}

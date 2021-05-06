@@ -1,6 +1,7 @@
 package history
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -137,8 +138,39 @@ func (q *TradeAggregationsQ) WithEndTime(endTime strtime.Millis) (*TradeAggregat
 	}
 }
 
+func (q *TradeAggregationsQ) Select(ctx context.Context, d *Q) ([]TradeAggregation, error) {
+	var records []TradeAggregation
+	// Use a batch size of 100% of the expected range.
+	// TODO: Should this be smaller to do more smaller queries?
+	batchTime := time.Duration(q.resolution*int64(q.pagingParams.Limit)) * time.Millisecond
+	batchStart := q.startTime
+	batchEnd := q.startTime.Add(batchTime)
+	// TODO: Pipeline these queries, and stream the responses, to avoid client-waiting-time
+	for {
+		// Try to fetch all remaining, in a single query.
+		batchLimit := q.pagingParams.Limit - uint64(len(records))
+		var batch []TradeAggregation
+		if err := d.Select(ctx, batch, q.GetSql(batchStart, batchEnd, batchLimit)); err != nil {
+			return nil, err
+		}
+		records = append(records, batch...)
+		if uint64(len(records)) == q.pagingParams.Limit {
+			// We've got enough
+			break
+		}
+		if batchEnd >= q.endTime {
+			// We've reached the end
+			break
+		}
+		// More to fetch
+		batchStart = batchEnd
+		batchEnd = batchEnd.Add(batchTime)
+	}
+	return records, nil
+}
+
 // GetSql generates a sql statement to aggregate Trades based on given parameters
-func (q *TradeAggregationsQ) GetSql() sq.SelectBuilder {
+func (q *TradeAggregationsQ) GetSql(startTime, endTime strtime.Millis, limit uint64) sq.SelectBuilder {
 	var orderPreserved bool
 	orderPreserved, q.baseAssetID, q.counterAssetID = getCanonicalAssetOrder(q.baseAssetID, q.counterAssetID)
 
@@ -152,28 +184,28 @@ func (q *TradeAggregationsQ) GetSql() sq.SelectBuilder {
 	bucketSQL = bucketSQL.From("history_trades").
 		Where(sq.Eq{"base_asset_id": q.baseAssetID, "counter_asset_id": q.counterAssetID})
 
-	// We limit the response to `q.pagingParams.Limit` buckets so we can adjust
+	// We limit the response to `limit` buckets so we can adjust
 	// startTime and endTime to not go beyond the range visible to the user.
 	// Note: we don't add/subtract q.offset because startTime and endTime are
 	// already adjusted (see: WithStartTime, WithEndTime).
 	if q.pagingParams.Order == db2.OrderAscending {
-		maxEndTime := q.startTime.ToInt64() + int64(q.pagingParams.Limit)*q.resolution
-		if q.endTime.IsNil() || q.endTime.ToInt64() > maxEndTime {
-			q.endTime = strtime.MillisFromInt64(maxEndTime)
+		maxEndTime := startTime.ToInt64() + int64(limit)*q.resolution
+		if endTime.IsNil() || endTime.ToInt64() > maxEndTime {
+			endTime = strtime.MillisFromInt64(maxEndTime)
 		}
 	} else /* db2.OrderDescending */ {
-		if q.endTime.IsNil() {
-			q.endTime = strtime.MillisFromSeconds(time.Now().Unix())
+		if endTime.IsNil() {
+			endTime = strtime.MillisFromSeconds(time.Now().Unix())
 		}
-		minStartTime := q.endTime.ToInt64() - int64(q.pagingParams.Limit)*q.resolution
-		if q.startTime.ToInt64() < minStartTime {
-			q.startTime = strtime.MillisFromInt64(minStartTime)
+		minStartTime := endTime.ToInt64() - int64(limit)*q.resolution
+		if startTime.ToInt64() < minStartTime {
+			startTime = strtime.MillisFromInt64(minStartTime)
 		}
 	}
 
 	bucketSQL = bucketSQL.
-		Where(sq.GtOrEq{"ledger_closed_at": q.startTime.ToTime()}).
-		Where(sq.Lt{"ledger_closed_at": q.endTime.ToTime()})
+		Where(sq.GtOrEq{"ledger_closed_at": startTime.ToTime()}).
+		Where(sq.Lt{"ledger_closed_at": endTime.ToTime()})
 
 	//ensure open/close order for cases when multiple trades occur in the same ledger
 	bucketSQL = bucketSQL.OrderBy("history_operation_id ", "\"order\"")
@@ -197,7 +229,7 @@ func (q *TradeAggregationsQ) GetSql() sq.SelectBuilder {
 	).
 		FromSelect(bucketSQL, "htrd").
 		GroupBy("timestamp").
-		Limit(q.pagingParams.Limit).
+		Limit(limit).
 		OrderBy("timestamp " + q.pagingParams.Order)
 }
 
