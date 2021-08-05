@@ -87,26 +87,68 @@ func loggerMiddleware(serverMetrics *ServerMetrics) func(next http.Handler) http
 func timeoutMiddleware(timeout time.Duration) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		fn := func(w http.ResponseWriter, r *http.Request) {
+			// txsub has a custom timeout
+			if r.Method == http.MethodPost {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			mw := newWrapResponseWriter(w, r)
 			ctx, cancel := context.WithTimeout(r.Context(), timeout)
-			defer func() {
-				cancel()
+			defer cancel()
+
+			done := make(chan struct{})
+			go func() {
+				next.ServeHTTP(&timeoutResponseWriter{mw, ctx, r}, r)
+				close(done)
+			}()
+
+			select {
+			case <-ctx.Done():
 				if ctx.Err() == context.DeadlineExceeded {
 					if mw.Status() == 0 {
 						// only write the header if it hasn't been written yet
-						mw.WriteHeader(http.StatusGatewayTimeout)
+
+						// Write directly to the responseWriter, so the wrapped writer
+						// still thinks nothing has been written, and the catch below works.
+						// A bit hacky.
+						w.WriteHeader(http.StatusGatewayTimeout)
 					}
 				}
-			}()
-
-			// txsub has a custom timeout
-			if r.Method != http.MethodPost {
-				r = r.WithContext(ctx)
+			case <-done:
 			}
-			next.ServeHTTP(mw, r)
 		}
 		return http.HandlerFunc(fn)
 	}
+}
+
+// timeoutResponseWriter makes sure we only ever write a 504 after the deadline
+// is exceeded.
+type timeoutResponseWriter struct {
+	middleware.WrapResponseWriter
+	ctx context.Context
+	r   *http.Request
+}
+
+func (w *timeoutResponseWriter) Write(b []byte) (int, error) {
+	if w.ctx.Err() == context.DeadlineExceeded && w.Status() == 0 {
+		// Deadline is exceeded and writing hasn't started.
+		w.logError("Write")
+		return 0, context.DeadlineExceeded
+	}
+	return w.Write(b)
+}
+
+func (w *timeoutResponseWriter) WriteHeader(statusCode int) {
+	if w.ctx.Err() == context.DeadlineExceeded {
+		w.logError("WriteHeader")
+		return
+	}
+	w.WriteHeader(statusCode)
+}
+
+func (w *timeoutResponseWriter) logError(method string) {
+	log.Ctx(w.ctx).WithFields(requestLogFields(w, w.r)).Warningf("%s to responseWriter after timeout exceeded", method)
 }
 
 // getClientData gets client data (name or version) from header or GET parameter
