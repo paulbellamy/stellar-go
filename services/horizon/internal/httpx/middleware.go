@@ -75,15 +75,10 @@ func loggerMiddleware(serverMetrics *ServerMetrics) func(next http.Handler) http
 			logger := log.WithField("req", middleware.GetReqID(ctx))
 			ctx = log.Set(ctx, logger)
 
-			// Checking `Accept` header from user request because if the streaming connection
-			// is reset before sending the first event no Content-Type header is sent in a response.
-			acceptHeader := r.Header.Get("Accept")
-			streaming := strings.Contains(acceptHeader, render.MimeEventStream)
-
 			then := time.Now()
 			next.ServeHTTP(mw, r.WithContext(ctx))
 			duration := time.Since(then)
-			logEndOfRequest(ctx, r, serverMetrics.RequestDurationSummary, duration, mw, streaming)
+			logEndOfRequest(ctx, r, serverMetrics.RequestDurationSummary, duration, mw)
 		})
 	}
 }
@@ -173,7 +168,14 @@ func getRoutePattern(r *http.Request) string {
 	return tctx.RoutePattern()
 }
 
-func logEndOfRequest(ctx context.Context, r *http.Request, requestDurationSummary *prometheus.SummaryVec, duration time.Duration, mw middleware.WrapResponseWriter, streaming bool) {
+func requestIsStreaming(r *http.Request) bool {
+	// Checking `Accept` header from user request because if the streaming connection
+	// is reset before sending the first event no Content-Type header is sent in a response.
+	acceptHeader := r.Header.Get("Accept")
+	return strings.Contains(acceptHeader, render.MimeEventStream)
+}
+
+func requestLogFields(mw middleware.WrapResponseWriter, r *http.Request) log.F {
 	route := sanitizeMetricRoute(getRoutePattern(r))
 
 	referer := r.Referer()
@@ -184,13 +186,12 @@ func logEndOfRequest(ctx context.Context, r *http.Request, requestDurationSummar
 		referer = "undefined"
 	}
 
-	log.Ctx(ctx).WithFields(log.F{
+	return log.F{
 		"bytes":           mw.BytesWritten(),
 		"client_name":     getClientData(r, clientNameHeader),
 		"client_version":  getClientData(r, clientVersionHeader),
 		"app_name":        getClientData(r, appNameHeader),
 		"app_version":     getClientData(r, appVersionHeader),
-		"duration":        duration.Seconds(),
 		"x_forwarder_for": r.Header.Get("X-Forwarded-For"),
 		"host":            r.Host,
 		"ip":              remoteAddrIP(r),
@@ -199,14 +200,21 @@ func logEndOfRequest(ctx context.Context, r *http.Request, requestDurationSummar
 		"path":            r.URL.String(),
 		"route":           route,
 		"status":          mw.Status(),
-		"streaming":       streaming,
+		"streaming":       requestIsStreaming(r),
 		"referer":         referer,
-	}).Info("Finished request")
+	}
+}
+
+func logEndOfRequest(ctx context.Context, r *http.Request, requestDurationSummary *prometheus.SummaryVec, duration time.Duration, mw middleware.WrapResponseWriter) {
+	fields := requestLogFields(mw, r)
+	fields["duration"] = duration.Seconds()
+
+	log.Ctx(ctx).WithFields(fields).Info("Finished request")
 
 	requestDurationSummary.With(prometheus.Labels{
 		"status":    strconv.FormatInt(int64(mw.Status()), 10),
-		"route":     route,
-		"streaming": strconv.FormatBool(streaming),
+		"route":     fields["route"].(string),
+		"streaming": strconv.FormatBool(requestIsStreaming(r)),
 		"method":    r.Method,
 	}).Observe(float64(duration.Seconds()))
 }
