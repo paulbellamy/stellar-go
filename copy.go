@@ -73,17 +73,8 @@ func main() {
 	}
 	log.Println("Total Records To Insert:", total)
 
-	start := time.Now()
-	var totalInserted uint64
-	for _, t := range tables {
-		jobs, ok := jobsByTable[t.Name]
-		if !ok || len(jobs) == 0 {
-			continue
-		}
-
-		steps := len(jobs) + 2
-
-		log.Printf("%s (%d/%d) before\n", t.Name, 1, steps)
+	for i, t := range tables {
+		log.Printf("%s (%d/%d) before\n", t.Name, i+1, len(tables))
 		if t.Before != nil {
 			beforeStart := time.Now()
 			session, err := db.Open("postgres", *dbUrl)
@@ -95,13 +86,29 @@ func main() {
 				log.Fatal(err)
 			}
 			session.Close()
-			log.Printf("%s (%d/%d) before done, duration: %v\n", t.Name, steps, steps, time.Since(beforeStart))
+			log.Printf("%s (%d/%d) before done, duration: %v\n", t.Name, i+1, len(tables), time.Since(beforeStart))
+		}
+	}
+
+	start := time.Now()
+	var totalInserted uint64
+	totalSteps := 0
+	for _, t := range tables {
+		jobs, _ := jobsByTable[t.Name]
+		totalSteps += len(jobs)
+	}
+	step := 0
+	for _, t := range tables {
+		jobs, ok := jobsByTable[t.Name]
+		if !ok || len(jobs) == 0 {
+			continue
 		}
 
 		tableStart := time.Now()
 		var inserted uint64
-		for i, batch := range jobs {
-			log.Printf("%s (%d/%d) batch started\n", t.Name, i+2, steps)
+		for _, batch := range jobs {
+			step++
+			log.Printf("%s (%d/%d) batch started\n", t.Name, step, totalSteps)
 			batchStart := time.Now()
 			nInserted, err := batch(context.Background())
 			inserted += nInserted
@@ -109,11 +116,15 @@ func main() {
 			if err != nil {
 				log.Fatal(err)
 			}
-			log.Printf("%s (%d/%d) batch inserted: %d, duration: %v\n", t.Name, i+2, steps, nInserted, time.Since(batchStart))
+			log.Printf("%s (%d/%d) batch inserted: %d, duration: %v\n", t.Name, step, totalSteps, nInserted, time.Since(batchStart))
 			log.Printf("progress: %.2f%%, duration: %v\n", 100*float64(totalInserted)/float64(total), time.Since(start))
 		}
 
-		log.Printf("%s (%d/%d) after\n", t.Name, steps, steps)
+		log.Printf("%s (%d/%d) done, inserted: %d, duration: %v\n", t.Name, step, totalSteps, inserted, time.Since(tableStart))
+	}
+
+	for i, t := range tables {
+		log.Printf("%s (%d/%d) after\n", t.Name, i+1, len(tables))
 		if t.After != nil {
 			afterStart := time.Now()
 			session, err := db.Open("postgres", *dbUrl)
@@ -125,11 +136,10 @@ func main() {
 				log.Fatal(err)
 			}
 			session.Close()
-			log.Printf("%s (%d/%d) after done, duration: %v\n", t.Name, steps, steps, time.Since(afterStart))
+			log.Printf("%s (%d/%d) after done, duration: %v\n", t.Name, i+1, len(tables), time.Since(afterStart))
 		}
-
-		log.Printf("%s (%d/%d) done, inserted: %d, duration: %v\n", t.Name, steps, steps, inserted, time.Since(tableStart))
 	}
+
 	log.Printf("(done) total: %d, duration: %v\n", totalInserted, time.Since(start))
 }
 
@@ -145,8 +155,10 @@ func randomString(length int) string {
 	return string(b)
 }
 
-func randomAddress() string {
-	return randomString(56)
+// Prepend the ID so it is unique.
+func randomAddress(id uint64) string {
+	addr := fmt.Sprint(id)
+	return addr + randomString(56-len(addr))
 }
 
 var tables = []Table{
@@ -154,24 +166,23 @@ var tables = []Table{
 		Name:    "history_accounts",
 		Columns: []string{"id", "address"},
 		Generate: func(id uint64) ([]interface{}, error) {
-			return []interface{}{id, randomAddress()}, nil
+			return []interface{}{id, randomAddress(id)}, nil
 		},
 		Before: func(ctx context.Context, session db.SessionInterface) error {
 			_, err := session.ExecRaw(ctx, `
-				-- ALTER TABLE public.history_trades DROP CONSTRAINT IF EXISTS "history_trades_base_account_id_fkey";
-				-- ALTER TABLE public.history_trades DROP CONSTRAINT IF EXISTS "history_trades_counter_account_id_fkey";
-				-- DROP INDEX IF EXISTS public.index_history_accounts_on_address;
-				-- DROP INDEX IF EXISTS public.index_history_accounts_on_id;
+				ALTER TABLE public.history_trades DROP CONSTRAINT IF EXISTS "history_trades_base_account_id_fkey";
+				ALTER TABLE public.history_trades DROP CONSTRAINT IF EXISTS "history_trades_counter_account_id_fkey";
+				DROP INDEX IF EXISTS public.index_history_accounts_on_address;
+				DROP INDEX IF EXISTS public.index_history_accounts_on_id;
 			`)
 			return err
 		},
 		After: func(ctx context.Context, session db.SessionInterface) error {
 			_, err := session.ExecRaw(ctx, `
-				-- TODO
-				-- CREATE UNIQUE INDEX index_history_accounts_on_address ON public.history_accounts USING btree (address);
-				-- CREATE UNIQUE INDEX index_history_accounts_on_id ON public.history_accounts USING btree (id);
-				-- ALTER TABLE public.history_trades ADD CONSTRAINT "history_trades_base_account_id_fkey" FOREIGN KEY (base_account_id) REFERENCES history_accounts(id);
-				-- ALTER TABLE public.history_trades ADD CONSTRAINT "history_trades_counter_account_id_fkey" FOREIGN KEY (counter_account_id) REFERENCES history_accounts(id);
+				CREATE UNIQUE INDEX IF NOT EXISTS index_history_accounts_on_address ON public.history_accounts USING btree (address);
+				CREATE UNIQUE INDEX IF NOT EXISTS index_history_accounts_on_id ON public.history_accounts USING btree (id);
+				ALTER TABLE public.history_trades ADD CONSTRAINT IF NOT EXISTS "history_trades_base_account_id_fkey" FOREIGN KEY (base_account_id) REFERENCES history_accounts(id);
+				ALTER TABLE public.history_trades ADD CONSTRAINT IF NOT EXISTS "history_trades_counter_account_id_fkey" FOREIGN KEY (counter_account_id) REFERENCES history_accounts(id);
 			`)
 			return err
 		},
@@ -230,7 +241,7 @@ var tables = []Table{
 				randomString(64),  // transaction_hash       | character varying(64)       |           | not null |
 				1,                 // ledger_sequence        | integer                     |           | not null |
 				0,                 // application_order      | integer                     |           | not null |
-				randomAddress(),   // account                | character varying(64)       |           | not null |
+				randomAddress(id), // account                | character varying(64)       |           | not null |
 				0,                 // account_sequence       | bigint                      |           | not null |
 				0,                 // max_fee                | bigint                      |           | not null |
 				0,                 // operation_count        | integer                     |           | not null |
@@ -244,10 +255,10 @@ var tables = []Table{
 				randomString(3),  // memo_type              | character varying           |           | not null | 'none'::character varying
 				randomString(13), // memo                   | character varying           |           |          |
 				// []byte{0, 0},     // time_bounds            | int8range                   |           |          |
-				true,             // successful             | boolean                     |           |          |
-				1,                // fee_charged            | bigint                      |           |          |
-				randomString(64), // inner_transaction_hash | character varying(64)       |           |          |
-				randomAddress(),  // fee_account            | character varying(64)       |           |          |
+				true,              // successful             | boolean                     |           |          |
+				1,                 // fee_charged            | bigint                      |           |          |
+				randomString(64),  // inner_transaction_hash | character varying(64)       |           |          |
+				randomAddress(id), // fee_account            | character varying(64)       |           |          |
 				pq.StringArray([]string{randomString(73), randomString(73), randomString(73), randomString(73)}), // inner_signatures       | character varying(96)[]     |           |          |
 				1,               // new_max_fee            | bigint                      |           |          |
 				randomString(0), // account_muxed          | character varying(69)       |           |          |
@@ -281,8 +292,7 @@ var tables = []Table{
 				CREATE INDEX CONCURRENTLY IF NOT EXISTS by_hash on public.history_transactions (transaction_hash);
 				CREATE INDEX CONCURRENTLY IF NOT EXISTS by_inner_hash on public.history_transactions (inner_transaction_hash) WHERE inner_transaction_hash IS NOT NULL;
 				CREATE INDEX CONCURRENTLY IF NOT EXISTS by_ledger on public.history_transactions (ledger_sequence, application_order);
-				-- TODO
-				-- CREATE UNIQUE INDEX IF NOT EXISTS hs_transaction_by_id ON public.history_transactions (id);
+				CREATE UNIQUE INDEX IF NOT EXISTS hs_transaction_by_id ON public.history_transactions (id);
 			`)
 			return err
 		},
@@ -306,8 +316,8 @@ var tables = []Table{
 				0, // type                 | integer               |           | not null |
 				// TODO: Generate random json details
 				// details              | jsonb                 |           |          |
-				randomAddress(), // source_account       | character varying(64) |           | not null | ''::character varying
-				"",              // source_account_muxed | character varying(69) |           |          |
+				randomAddress(id), // source_account       | character varying(64) |           | not null | ''::character varying
+				"",                // source_account_muxed | character varying(69) |           |          |
 			}, nil
 
 			// Check constraints:
@@ -323,8 +333,7 @@ var tables = []Table{
 		},
 		After: func(ctx context.Context, session db.SessionInterface) error {
 			_, err := session.ExecRaw(ctx, `
-				-- TODO
-				-- CREATE UNIQUE INDEX index_history_operations_on_id ON public.history_operations (id);
+				CREATE UNIQUE INDEX IF NOT EXISTS index_history_operations_on_id ON public.history_operations (id);
 				CREATE INDEX CONCURRENTLY IF NOT EXISTS index_history_operations_on_transaction_id ON public.history_operations (transaction_id);
 				CREATE INDEX CONCURRENTLY IF NOT EXISTS index_history_operations_on_type ON public.history_operations (type);
 			`)
@@ -366,9 +375,8 @@ var tables = []Table{
 		},
 		After: func(ctx context.Context, session db.SessionInterface) error {
 			_, err := session.ExecRaw(ctx, `
-				-- TODO
-				-- CREATE UNIQUE INDEX IF NOT EXISTS "hist_e_by_order" ON public.history_effects (history_operation_id, "order");
-				-- CREATE UNIQUE INDEX IF NOT EXISTS "hist_e_id" ON public.history_effects (history_account_id, history_operation_id, "order");
+				CREATE UNIQUE INDEX IF NOT EXISTS "hist_e_by_order" ON public.history_effects (history_operation_id, "order");
+				CREATE UNIQUE INDEX IF NOT EXISTS "hist_e_id" ON public.history_effects (history_account_id, history_operation_id, "order");
 				CREATE INDEX CONCURRENTLY IF NOT EXISTS "index_history_effects_on_type" ON public.history_effects (type);
 				CREATE INDEX CONCURRENTLY IF NOT EXISTS "trade_effects_by_order_book" ON public.history_effects ((details ->> 'sold_asset_type'::text), (details ->> 'sold_asset_code'::text), (details ->> 'sold_asset_issuer'::text), (details ->> 'bought_asset_type'::text), (details ->> 'bought_asset_code'::text), (details ->> 'bought_asset_issuer'::text)) WHERE type = 33;
 			`)
