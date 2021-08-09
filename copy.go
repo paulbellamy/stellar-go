@@ -422,7 +422,7 @@ func (t *Table) Jobs(ctx context.Context, dbUrl string, multiplier, rows, perTxn
 
 	// Find the max existing ID
 	var offset uint64
-	wg, ctx := errgroup.WithContext(context.Background())
+	wg, ctx := errgroup.WithContext(ctx)
 	wg.Go(func() error {
 		return session.DB.QueryRowContext(ctx, fmt.Sprintf("SELECT %q FROM %q ORDER BY %q DESC LIMIT 1", t.Columns[0], t.Name, t.Columns[0])).Scan(&offset)
 	})
