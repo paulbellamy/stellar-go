@@ -408,7 +408,7 @@ func (t *Table) Jobs(dbUrl string, multiplier, rows, perTxn int) ([]Job, uint64,
 
 	// Find the max existing ID
 	var offset uint64
-	err = session.DB.QueryRow(fmt.Sprintf("SELECT %q FROM %q ORDER BY %q LIMIT 1", t.Columns[0], t.Name, t.Columns[0])).Scan(&offset)
+	err = session.DB.QueryRow(fmt.Sprintf("SELECT %q FROM %q ORDER BY %q DESC LIMIT 1", t.Columns[0], t.Name, t.Columns[0])).Scan(&offset)
 	if err != nil {
 		return nil, 0, err
 	}
