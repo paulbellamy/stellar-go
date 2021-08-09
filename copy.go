@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/lib/pq"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/stellar/go/support/db"
 )
@@ -39,7 +41,7 @@ SET default_tablespace = '';
 
 func main() {
 	dbUrl := flag.String("db-url", "", "Database Url")
-	table := flag.String("table", "", "Set this to limit to a single table")
+	onlyTable := flag.String("table", "", "Set this to limit to a single table")
 	multiplier := flag.Int("multiplier", 0, "How many times to multiply the database size")
 	rows := flag.Int("rows", 0, "Limit the number of inserted rows per table, for quicker testing runs")
 	perTxn := flag.Int("per-txn", 100000, "How many max to insert in one txn")
@@ -58,19 +60,32 @@ func main() {
 	log.Println("Calculating work...")
 	jobsByTable := map[string][]Job{}
 	var total uint64
+	var jobsLock sync.Mutex
+	wg, ctx := errgroup.WithContext(context.Background())
 	for _, t := range tables {
-		if *table != "" && t.Name != *table {
+		table := t
+		if *onlyTable != "" && t.Name != *onlyTable {
 			log.Println(t.Name, "(skip)")
 			continue
 		}
-		jobs, nRecords, err := t.Jobs(*dbUrl, *multiplier, *rows, *perTxn)
-		if err != nil {
-			log.Fatal(err)
-		}
-		jobsByTable[t.Name] = jobs
-		total += nRecords
-		log.Printf("%s (ready) jobs: %d, records: %d\n", t.Name, len(jobs), nRecords)
+		wg.Go(func() error {
+			jobs, nRecords, err := table.Jobs(ctx, *dbUrl, *multiplier, *rows, *perTxn)
+			if err != nil {
+				return err
+			}
+			jobsLock.Lock()
+			defer jobsLock.Unlock()
+			jobsByTable[table.Name] = jobs
+			total += nRecords
+			log.Printf("%s (ready) jobs: %d, records: %d\n", table.Name, len(jobs), nRecords)
+			return nil
+		})
 	}
+
+	if err := wg.Wait(); err != nil {
+		log.Fatal(err)
+	}
+
 	log.Println("Total Records To Insert:", total)
 
 	for i, t := range tables {
@@ -94,8 +109,7 @@ func main() {
 	var totalInserted uint64
 	totalSteps := 0
 	for _, t := range tables {
-		jobs, _ := jobsByTable[t.Name]
-		totalSteps += len(jobs)
+		totalSteps += len(jobsByTable[t.Name])
 	}
 	step := 0
 	for _, t := range tables {
@@ -399,7 +413,7 @@ type Table struct {
 	After    func(ctx context.Context, session db.SessionInterface) error
 }
 
-func (t *Table) Jobs(dbUrl string, multiplier, rows, perTxn int) ([]Job, uint64, error) {
+func (t *Table) Jobs(ctx context.Context, dbUrl string, multiplier, rows, perTxn int) ([]Job, uint64, error) {
 	session, err := db.Open("postgres", dbUrl)
 	if err != nil {
 		return nil, 0, err
@@ -408,20 +422,27 @@ func (t *Table) Jobs(dbUrl string, multiplier, rows, perTxn int) ([]Job, uint64,
 
 	// Find the max existing ID
 	var offset uint64
-	err = session.DB.QueryRow(fmt.Sprintf("SELECT %q FROM %q ORDER BY %q DESC LIMIT 1", t.Columns[0], t.Name, t.Columns[0])).Scan(&offset)
-	if err != nil {
-		return nil, 0, err
-	}
+	wg, ctx := errgroup.WithContext(context.Background())
+	wg.Go(func() error {
+		return session.DB.QueryRowContext(ctx, fmt.Sprintf("SELECT %q FROM %q ORDER BY %q DESC LIMIT 1", t.Columns[0], t.Name, t.Columns[0])).Scan(&offset)
+	})
 
 	total := uint64(rows)
 	if total == 0 {
-		// Find the existing count
-		var count uint64
-		err = session.DB.QueryRow(fmt.Sprintf("SELECT count(*) FROM %q", t.Name)).Scan(&count)
-		if err != nil {
-			return nil, 0, err
-		}
-		total = count * uint64(multiplier-1)
+		wg.Go(func() error {
+			// Find the existing count
+			var count uint64
+			err = session.DB.QueryRowContext(ctx, fmt.Sprintf("SELECT count(*) FROM %q", t.Name)).Scan(&count)
+			if err != nil {
+				return err
+			}
+			total = count * uint64(multiplier-1)
+			return nil
+		})
+	}
+
+	if err := wg.Wait(); err != nil {
+		return nil, 0, err
 	}
 
 	if perTxn <= 0 {
