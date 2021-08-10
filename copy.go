@@ -427,7 +427,7 @@ func (t *Table) Jobs(ctx context.Context, dbUrl string, multiplier, rows, perTxn
 	wg, ctx := errgroup.WithContext(ctx)
 	if t.Sequence != "" {
 		wg.Go(func() error {
-			return session.DB.QueryRowContext(ctx, fmt.Sprintf("SELECT curval(%s)", t.Sequence)).Scan(&offset)
+			return session.DB.QueryRowContext(ctx, "SELECT curval($1)", t.Sequence).Scan(&offset)
 		})
 	}
 
@@ -436,7 +436,7 @@ func (t *Table) Jobs(ctx context.Context, dbUrl string, multiplier, rows, perTxn
 		wg.Go(func() error {
 			// Quick estimate of the existing count
 			var count uint64
-			err = session.DB.QueryRowContext(ctx, "SELECT reltuples::bigint FROM pg_class r WHERE relkind = 'r' AND relname = ?", t.Name).Scan(&count)
+			err = session.DB.QueryRowContext(ctx, "SELECT reltuples::bigint FROM pg_class r WHERE relkind = 'r' AND relname = $1", t.Name).Scan(&count)
 
 			if err != nil {
 				return err
