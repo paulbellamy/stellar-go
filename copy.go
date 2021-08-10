@@ -427,7 +427,7 @@ func (t *Table) Jobs(ctx context.Context, dbUrl string, multiplier, rows, perTxn
 	wg, ctx := errgroup.WithContext(ctx)
 	if t.Sequence != "" {
 		wg.Go(func() error {
-			return session.DB.QueryRowContext(ctx, "SELECT curval($1)", t.Sequence).Scan(&offset)
+			return session.DB.QueryRowContext(ctx, fmt.Sprintf("SELECT nextval('%s')", t.Sequence)).Scan(&offset)
 		})
 	}
 
