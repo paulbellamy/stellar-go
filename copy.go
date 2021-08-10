@@ -177,8 +177,9 @@ func randomAddress(id uint64) string {
 
 var tables = []Table{
 	{
-		Name:    "history_accounts",
-		Columns: []string{"id", "address"},
+		Name:     "history_accounts",
+		Sequence: "history_accounts_id_seq",
+		Columns:  []string{"id", "address"},
 		Generate: func(id uint64) ([]interface{}, error) {
 			return []interface{}{id, randomAddress(id)}, nil
 		},
@@ -405,7 +406,8 @@ type Account struct {
 }
 
 type Table struct {
-	Name string
+	Name     string
+	Sequence string
 	// First column must be the ID.
 	Columns  []string
 	Generate func(id uint64) ([]interface{}, error)
@@ -423,20 +425,28 @@ func (t *Table) Jobs(ctx context.Context, dbUrl string, multiplier, rows, perTxn
 	// Find the max existing ID
 	var offset uint64
 	wg, ctx := errgroup.WithContext(ctx)
-	wg.Go(func() error {
-		return session.DB.QueryRowContext(ctx, fmt.Sprintf("SELECT %q FROM %q ORDER BY %q DESC LIMIT 1", t.Columns[0], t.Name, t.Columns[0])).Scan(&offset)
-	})
+	if t.Sequence != "" {
+		wg.Go(func() error {
+			return session.DB.QueryRowContext(ctx, fmt.Sprintf("SELECT curval(%s)", t.Sequence)).Scan(&offset)
+		})
+	}
 
 	total := uint64(rows)
 	if total == 0 {
 		wg.Go(func() error {
-			// Find the existing count
+			// Quick estimate of the existing count
 			var count uint64
-			err = session.DB.QueryRowContext(ctx, fmt.Sprintf("SELECT count(*) FROM %q", t.Name)).Scan(&count)
+			err = session.DB.QueryRowContext(ctx, "SELECT reltuples::bigint FROM pg_class r WHERE relkind = 'r' AND relname = ?", t.Name).Scan(&count)
+
 			if err != nil {
 				return err
 			}
 			total = count * uint64(multiplier-1)
+
+			if t.Sequence != "" {
+				// If we didn't have an explicit sequence to check for the offset...
+				offset = count
+			}
 			return nil
 		})
 	}
