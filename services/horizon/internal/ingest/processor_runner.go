@@ -23,19 +23,19 @@ const (
 
 type horizonChangeProcessor interface {
 	processors.ChangeProcessor
-	Commit(context.Context) error
+	Commit(context.Context, history.IngestionQ) error
 }
 
 type horizonTransactionProcessor interface {
 	processors.LedgerTransactionProcessor
-	Commit(context.Context) error
+	Commit(context.Context, history.IngestionQ) error
 }
 
 type statsChangeProcessor struct {
 	*ingest.StatsChangeProcessor
 }
 
-func (statsChangeProcessor) Commit(ctx context.Context) error {
+func (statsChangeProcessor) Commit(ctx context.Context, db history.IngestionQ) error {
 	return nil
 }
 
@@ -43,7 +43,7 @@ type statsLedgerTransactionProcessor struct {
 	*processors.StatsLedgerTransactionProcessor
 }
 
-func (statsLedgerTransactionProcessor) Commit(ctx context.Context) error {
+func (statsLedgerTransactionProcessor) Commit(ctx context.Context, db history.IngestionQ) error {
 	return nil
 }
 
@@ -101,7 +101,6 @@ func (s *ProcessorRunner) DisableMemoryStatsLogging() {
 }
 
 func buildChangeProcessor(
-	historyQ history.IngestionQ,
 	changeStats *ingest.StatsChangeProcessor,
 	source ingestionSource,
 	ledgerSequence uint32,
@@ -113,14 +112,14 @@ func buildChangeProcessor(
 	useLedgerCache := source == ledgerSource
 	return newGroupChangeProcessors([]horizonChangeProcessor{
 		statsChangeProcessor,
-		processors.NewAccountDataProcessor(historyQ),
-		processors.NewAccountsProcessor(historyQ),
-		processors.NewOffersProcessor(historyQ, ledgerSequence),
-		processors.NewAssetStatsProcessor(historyQ, useLedgerCache),
-		processors.NewSignersProcessor(historyQ, useLedgerCache),
-		processors.NewTrustLinesProcessor(historyQ),
-		processors.NewClaimableBalancesChangeProcessor(historyQ),
-		processors.NewLiquidityPoolsChangeProcessor(historyQ, ledgerSequence),
+		processors.NewAccountDataProcessor(),
+		processors.NewAccountsProcessor(),
+		processors.NewOffersProcessor(ledgerSequence),
+		processors.NewAssetStatsProcessor(useLedgerCache),
+		processors.NewSignersProcessor(useLedgerCache),
+		processors.NewTrustLinesProcessor(),
+		processors.NewClaimableBalancesChangeProcessor(),
+		processors.NewLiquidityPoolsChangeProcessor(ledgerSequence),
 	})
 }
 
@@ -136,14 +135,14 @@ func (s *ProcessorRunner) buildTransactionProcessor(
 	sequence := uint32(ledger.Header.LedgerSeq)
 	return newGroupTransactionProcessors([]horizonTransactionProcessor{
 		statsLedgerTransactionProcessor,
-		processors.NewEffectProcessor(s.historyQ, sequence),
-		processors.NewLedgerProcessor(s.historyQ, ledger, CurrentVersion),
-		processors.NewOperationProcessor(s.historyQ, sequence),
-		tradeProcessor,
-		processors.NewParticipantsProcessor(s.historyQ, sequence),
-		processors.NewTransactionProcessor(s.historyQ, sequence),
-		processors.NewClaimableBalancesTransactionProcessor(s.historyQ, sequence),
-		processors.NewLiquidityPoolsTransactionProcessor(s.historyQ, sequence),
+		processors.NewEffectProcessor(sequence),
+		processors.NewLedgerProcessor(ledger, CurrentVersion),
+		processors.NewOperationProcessor(sequence),
+		processors.NewTradeProcessor(ledger),
+		processors.NewParticipantsProcessor(sequence),
+		processors.NewTransactionProcessor(),
+		processors.NewClaimableBalancesTransactionProcessor(sequence),
+		processors.NewLiquidityPoolsTransactionProcessor(sequence),
 	})
 }
 
@@ -196,7 +195,7 @@ func (s *ProcessorRunner) RunHistoryArchiveIngestion(
 	bucketListHash xdr.Hash,
 ) (ingest.StatsChangeProcessorResults, error) {
 	changeStats := ingest.StatsChangeProcessor{}
-	changeProcessor := buildChangeProcessor(s.historyQ, &changeStats, historyArchiveSource, checkpointLedger)
+	changeProcessor := buildChangeProcessor(&changeStats, historyArchiveSource, checkpointLedger)
 
 	if checkpointLedger == 1 {
 		if err := changeProcessor.ProcessChange(s.ctx, ingest.GenesisChange(s.config.NetworkPassphrase)); err != nil {
@@ -233,7 +232,7 @@ func (s *ProcessorRunner) RunHistoryArchiveIngestion(
 		}
 	}
 
-	if err := changeProcessor.Commit(s.ctx); err != nil {
+	if err := changeProcessor.Commit(s.ctx, s.historyQ); err != nil {
 		return changeStats.GetResults(), errors.Wrap(err, "Error commiting changes from processor")
 	}
 
@@ -322,7 +321,7 @@ func (s *ProcessorRunner) RunAllProcessorsOnLedger(ledger xdr.LedgerCloseMeta) (
 		return
 	}
 
-	groupChangeProcessors := buildChangeProcessor(s.historyQ, &changeStatsProcessor, ledgerSource, ledger.LedgerSequence())
+	groupChangeProcessors := buildChangeProcessor(&changeStatsProcessor, ledgerSource, ledger.LedgerSequence())
 	err = s.runChangeProcessorOnLedger(groupChangeProcessors, ledger)
 	if err != nil {
 		return

@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/stellar/go/ingest"
-	"github.com/stellar/go/services/horizon/internal/db2/history"
 	"github.com/stellar/go/services/horizon/internal/toid"
 	"github.com/stellar/go/support/errors"
 	"github.com/stellar/go/xdr"
@@ -31,26 +30,24 @@ func (b *claimableBalance) addOperationID(id int64) {
 }
 
 type ClaimableBalancesTransactionProcessor struct {
-	sequence            uint32
-	claimableBalanceSet map[string]claimableBalance
-	qClaimableBalances  history.QHistoryClaimableBalances
+	changeset *Changeset
+	sequence  uint32
 }
 
-func NewClaimableBalancesTransactionProcessor(Q history.QHistoryClaimableBalances, sequence uint32) *ClaimableBalancesTransactionProcessor {
+func NewClaimableBalancesTransactionProcessor(changeset *Changeset, sequence uint32) *ClaimableBalancesTransactionProcessor {
 	return &ClaimableBalancesTransactionProcessor{
-		qClaimableBalances:  Q,
-		sequence:            sequence,
-		claimableBalanceSet: map[string]claimableBalance{},
+		changeset: changeset,
+		sequence:  sequence,
 	}
 }
 
 func (p *ClaimableBalancesTransactionProcessor) ProcessTransaction(ctx context.Context, transaction ingest.LedgerTransaction) error {
-	err := p.addTransactionClaimableBalances(p.claimableBalanceSet, p.sequence, transaction)
+	err := p.addTransactionClaimableBalances(p.sequence, transaction)
 	if err != nil {
 		return err
 	}
 
-	err = p.addOperationClaimableBalances(p.claimableBalanceSet, p.sequence, transaction)
+	err = p.addOperationClaimableBalances(p.sequence, transaction)
 	if err != nil {
 		return err
 	}
@@ -58,27 +55,23 @@ func (p *ClaimableBalancesTransactionProcessor) ProcessTransaction(ctx context.C
 	return nil
 }
 
-func (p *ClaimableBalancesTransactionProcessor) addTransactionClaimableBalances(cbSet map[string]claimableBalance, sequence uint32, transaction ingest.LedgerTransaction) error {
+func (p *ClaimableBalancesTransactionProcessor) addTransactionClaimableBalances(sequence uint32, transaction ingest.LedgerTransaction) error {
 	transactionID := toid.New(int32(sequence), int32(transaction.Index), 0).ToInt64()
 	transactionClaimableBalances, err := claimableBalancesForTransaction(
-		sequence,
 		transaction,
 	)
 	if err != nil {
 		return errors.Wrap(err, "Could not determine claimable balances for transaction")
 	}
 
-	for _, cb := range transactionClaimableBalances {
-		entry := cbSet[cb]
-		entry.addTransactionID(transactionID)
-		cbSet[cb] = entry
+	for _, cbID := range transactionClaimableBalances {
+		p.changeset.AddClaimableBalanceTransaction(cbID, transactionID)
 	}
 
 	return nil
 }
 
 func claimableBalancesForTransaction(
-	sequence uint32,
 	transaction ingest.LedgerTransaction,
 ) ([]string, error) {
 	changes, err := transaction.GetChanges()
@@ -135,17 +128,15 @@ func claimableBalancesForChanges(
 	return cbs, nil
 }
 
-func (p *ClaimableBalancesTransactionProcessor) addOperationClaimableBalances(cbSet map[string]claimableBalance, sequence uint32, transaction ingest.LedgerTransaction) error {
+func (p *ClaimableBalancesTransactionProcessor) addOperationClaimableBalances(sequence uint32, transaction ingest.LedgerTransaction) error {
 	claimableBalances, err := claimableBalancesForOperations(transaction, sequence)
 	if err != nil {
 		return errors.Wrap(err, "could not determine operation claimable balances")
 	}
 
 	for operationID, cbs := range claimableBalances {
-		for _, cb := range cbs {
-			entry := cbSet[cb]
-			entry.addOperationID(operationID)
-			cbSet[cb] = entry
+		for _, cbID := range cbs {
+			p.changeset.AddClaimableBalanceTransaction(cbID, operationID)
 		}
 	}
 
@@ -178,79 +169,6 @@ func claimableBalancesForOperations(transaction ingest.LedgerTransaction, sequen
 }
 
 func (p *ClaimableBalancesTransactionProcessor) Commit(ctx context.Context) error {
-	if len(p.claimableBalanceSet) > 0 {
-		if err := p.loadClaimableBalanceIDs(ctx, p.claimableBalanceSet); err != nil {
-			return err
-		}
-
-		if err := p.insertDBTransactionClaimableBalances(ctx, p.claimableBalanceSet); err != nil {
-			return err
-		}
-
-		if err := p.insertDBOperationsClaimableBalances(ctx, p.claimableBalanceSet); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (p *ClaimableBalancesTransactionProcessor) loadClaimableBalanceIDs(ctx context.Context, claimableBalanceSet map[string]claimableBalance) error {
-	ids := make([]string, 0, len(claimableBalanceSet))
-	for id := range claimableBalanceSet {
-		ids = append(ids, id)
-	}
-
-	toInternalID, err := p.qClaimableBalances.CreateHistoryClaimableBalances(ctx, ids, maxBatchSize)
-	if err != nil {
-		return errors.Wrap(err, "Could not create claimable balance ids")
-	}
-
-	for _, id := range ids {
-		internalID, ok := toInternalID[id]
-		if !ok {
-			// TODO: Figure out the right way to convert the id to a string here. %v will be nonsense.
-			return errors.Errorf("no internal id found for claimable balance %v", id)
-		}
-
-		cb := claimableBalanceSet[id]
-		cb.internalID = internalID
-		claimableBalanceSet[id] = cb
-	}
-
-	return nil
-}
-
-func (p ClaimableBalancesTransactionProcessor) insertDBTransactionClaimableBalances(ctx context.Context, claimableBalanceSet map[string]claimableBalance) error {
-	batch := p.qClaimableBalances.NewTransactionClaimableBalanceBatchInsertBuilder(maxBatchSize)
-
-	for _, entry := range claimableBalanceSet {
-		for transactionID := range entry.transactionSet {
-			if err := batch.Add(ctx, transactionID, entry.internalID); err != nil {
-				return errors.Wrap(err, "could not insert transaction claimable balance in db")
-			}
-		}
-	}
-
-	if err := batch.Exec(ctx); err != nil {
-		return errors.Wrap(err, "could not flush transaction claimable balances to db")
-	}
-	return nil
-}
-
-func (p ClaimableBalancesTransactionProcessor) insertDBOperationsClaimableBalances(ctx context.Context, claimableBalanceSet map[string]claimableBalance) error {
-	batch := p.qClaimableBalances.NewOperationClaimableBalanceBatchInsertBuilder(maxBatchSize)
-
-	for _, entry := range claimableBalanceSet {
-		for operationID := range entry.operationSet {
-			if err := batch.Add(ctx, operationID, entry.internalID); err != nil {
-				return errors.Wrap(err, "could not insert operation claimable balance in db")
-			}
-		}
-	}
-
-	if err := batch.Exec(ctx); err != nil {
-		return errors.Wrap(err, "could not flush operation claimable balances to db")
-	}
+	// Stub for interface. Changes are committed by the changeset.
 	return nil
 }

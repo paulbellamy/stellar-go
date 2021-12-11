@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stellar/go/ingest"
+	"github.com/stellar/go/services/horizon/internal/db2/history"
 	"github.com/stellar/go/support/errors"
 )
 
@@ -38,10 +39,10 @@ func (g groupChangeProcessors) ProcessChange(ctx context.Context, change ingest.
 	return nil
 }
 
-func (g groupChangeProcessors) Commit(ctx context.Context) error {
+func (g groupChangeProcessors) Commit(ctx context.Context, db history.IngestionQ) error {
 	for _, p := range g.processors {
 		startTime := time.Now()
-		if err := p.Commit(ctx); err != nil {
+		if err := p.Commit(ctx, db); err != nil {
 			return errors.Wrapf(err, "error in %T.Commit", p)
 		}
 		g.AddRunDuration(fmt.Sprintf("%T", p), startTime)
@@ -72,10 +73,10 @@ func (g groupTransactionProcessors) ProcessTransaction(ctx context.Context, tx i
 	return nil
 }
 
-func (g groupTransactionProcessors) Commit(ctx context.Context) error {
+func (g groupTransactionProcessors) Commit(ctx context.Context, db history.IngestionQ) error {
 	for _, p := range g.processors {
 		startTime := time.Now()
-		if err := p.Commit(ctx); err != nil {
+		if err := p.Commit(ctx, db); err != nil {
 			return errors.Wrapf(err, "error in %T.Commit", p)
 		}
 		g.AddRunDuration(fmt.Sprintf("%T", p), startTime)
