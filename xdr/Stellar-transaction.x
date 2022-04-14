@@ -3,6 +3,7 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 %#include "xdr/Stellar-ledger-entries.h"
+%#include "xdr/Stellar-contract.h"
 
 namespace stellar
 {
@@ -11,19 +12,6 @@ union LiquidityPoolParameters switch (LiquidityPoolType type)
 {
 case LIQUIDITY_POOL_CONSTANT_PRODUCT:
     LiquidityPoolConstantProductParameters constantProduct;
-};
-
-// Source or destination of a payment operation
-union MuxedAccount switch (CryptoKeyType type)
-{
-case KEY_TYPE_ED25519:
-    uint256 ed25519;
-case KEY_TYPE_MUXED_ED25519:
-    struct
-    {
-        uint64 id;
-        uint256 ed25519;
-    } med25519;
 };
 
 struct DecoratedSignature
@@ -57,7 +45,9 @@ enum OperationType
     CLAWBACK_CLAIMABLE_BALANCE = 20,
     SET_TRUST_LINE_FLAGS = 21,
     LIQUIDITY_POOL_DEPOSIT = 22,
-    LIQUIDITY_POOL_WITHDRAW = 23
+    LIQUIDITY_POOL_WITHDRAW = 23,
+    MANAGE_CONTRACT = 24,
+    INVOKE_CONTRACT = 25
 };
 
 /* CreateAccount
@@ -465,6 +455,44 @@ struct LiquidityPoolWithdrawOp
     int64 minAmountB;     // minimum amount of second asset to withdraw
 };
 
+
+/* Manage a smart contract
+
+   Threshold: med
+
+   Result: ManageContractResult
+*/
+struct ManageContractOp
+{
+    int64 contractID;
+    union switch (ContractCodeType type)
+    {
+        case CONTRACT_CODE_WASM:
+            WASMCode wasm;
+        default:
+            void;
+    } *body;
+};
+
+/* Invoke a smart contract
+
+   Threshold: med
+
+   Result: InvokeContractResult
+*/
+struct InvokeContractOp
+{
+    AccountID owner;
+    int64 contractID;
+    SCEnv locals; // Any op-local values to add to environment.
+    LedgerKey readSet<>; // Worst-case set keys to read.
+    LedgerKey writeSet<>; // Worst-case set of keys to write (or read).
+    SCSymbol function; // Function to invoke in contract.
+    SCSymbol arguments<>; // Args to take from env and pass to function.
+    SCSymbol *definition; // Optional env entry to update with result.
+    SCSymbol *predicate; // Optional env entry to predicate call on non-Status-error value of.
+};
+
 /* An operation is the lowest unit of work that a transaction does */
 struct Operation
 {
@@ -523,6 +551,10 @@ struct Operation
         LiquidityPoolDepositOp liquidityPoolDepositOp;
     case LIQUIDITY_POOL_WITHDRAW:
         LiquidityPoolWithdrawOp liquidityPoolWithdrawOp;
+    case MANAGE_CONTRACT:
+        ManageContractOp manageContractOp;
+    case INVOKE_CONTRACT:
+        InvokeContractOp invokeContractOp;
     }
     body;
 };
@@ -1415,6 +1447,94 @@ default:
     void;
 };
 
+/******* ManageContract Result ********/
+
+enum ManageContractResultCode
+{
+    MANAGE_CONTRACT_SUCCESS = 0,
+    MANAGE_CONTRACT_NOT_SUPPORTED_YET = -1,
+    MANAGE_CONTRACT_NOT_FOUND = -2,
+    MANAGE_CONTRACT_LOW_RESERVE = -3
+};
+
+union ManageContractResult switch (
+    ManageContractResultCode code)
+{
+    case MANAGE_CONTRACT_SUCCESS:
+        void;
+    case MANAGE_CONTRACT_NOT_SUPPORTED_YET:
+        void;
+    case MANAGE_CONTRACT_NOT_FOUND:
+        void;
+    case MANAGE_CONTRACT_LOW_RESERVE:
+        void;
+    default:
+        void;
+};
+
+/******* InvokeContract Result ********/
+
+enum InvokeContractResultCode
+{
+    INVOKE_CONTRACT_SUCCESS = 0,
+    INVOKE_CONTRACT_NOT_SUPPORTED_YET = -1,
+    INVOKE_CONTRACT_TRAPPED = -2,
+    INVOKE_CONTRACT_HOST_ERR = -3,
+    INVOKE_CONTRACT_MALFORMED = -4,
+    INVOKE_CONTRACT_OUT_OF_GAS = -5
+};
+
+enum ContractTrapType
+{
+    HOST_TRAPPED = 0,
+    GUEST_TRAPPED = 1
+};
+
+enum WasmTrapCode {
+    WASM_TRAP_UNSPECIFIED = -1, // For engines that don't differentiate traps.
+    WASM_TRAP_OUT_OF_BOUNDS_MEMORY_ACCESS = -2,
+    WASM_TRAP_DIVISION_BY_ZERO = -3,
+    WASM_TRAP_INTEGER_OVERFLOW = -4,
+    WASM_TRAP_INTEGER_CONVERSION = -5,
+    WASM_TRAP_INDIRECT_CALL_TYPE_MISMATCH = -6,
+    WASM_TRAP_TABLE_INDEX_OUT_OF_RANGE = -7,
+    WASM_TRAP_TABLE_ELEMENT_IS_NULL = -8,
+    WASM_TRAP_EXIT = -9,
+    WASM_TRAP_ABORT = -10,
+    WASM_TRAP_UNREACHABLE = -11,
+    WASM_TRAP_STACK_OVERFLOW = -12
+};
+
+enum HostTrapCode {
+    HOST_TRAP_UNSPECIFIED = -1,
+    HOST_TRAP_VALUE_NOT_FOUND = -2,
+    HOST_TRAP_VALUE_HAS_WRONG_TYPE = -3,
+    HOST_TRAP_VALUE_OUT_OF_RANGE = -4,
+    HOST_TRAP_LEDGER_ENTRY_DENIED = -5
+};
+
+union InvokeContractResult switch (
+    InvokeContractResultCode code)
+{
+case INVOKE_CONTRACT_SUCCESS:
+    SCVal returnVal;
+case INVOKE_CONTRACT_TRAPPED:
+    union switch (ContractTrapType type) {
+    case HOST_TRAPPED:
+        HostTrapCode hostTrap;
+    case GUEST_TRAPPED:
+        union switch (ContractCodeType type) {
+            case CONTRACT_CODE_WASM:
+                WasmTrapCode wasmTrap;
+            default:
+                void;
+        } guestTrap;
+    } trap;
+default:
+    void;
+};
+
+
 /* High level Operation Result */
 enum OperationResultCode
 {
@@ -1481,6 +1601,10 @@ case opINNER:
         LiquidityPoolDepositResult liquidityPoolDepositResult;
     case LIQUIDITY_POOL_WITHDRAW:
         LiquidityPoolWithdrawResult liquidityPoolWithdrawResult;
+    case MANAGE_CONTRACT:
+        ManageContractResult manageContractResult;
+    case INVOKE_CONTRACT:
+        InvokeContractResult invokeContractResult;
     }
     tr;
 default:
@@ -1581,4 +1705,5 @@ struct TransactionResult
     }
     ext;
 };
+
 }

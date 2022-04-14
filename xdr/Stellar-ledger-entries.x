@@ -15,6 +15,7 @@ typedef int64 SequenceNumber;
 typedef uint64 TimePoint;
 typedef opaque DataValue<64>;
 typedef Hash PoolID; // SHA256(LiquidityPoolParameters)
+typedef opaque WASMCode<65536>;
 
 // 1-4 alphanumeric characters right-padded with 0 bytes
 typedef opaque AssetCode4[4];
@@ -97,7 +98,9 @@ enum LedgerEntryType
     OFFER = 2,
     DATA = 3,
     CLAIMABLE_BALANCE = 4,
-    LIQUIDITY_POOL = 5
+    LIQUIDITY_POOL = 5,
+    CONTRACT_CODE = 6,
+    CONTRACT_DATA = 7
 };
 
 struct Signer
@@ -290,7 +293,7 @@ struct TrustLineEntry
 
 enum OfferEntryFlags
 {
-    // issuer has authorized account to perform transactions with its credit
+    // an offer with this flag will not act on and take a reverse offer of equal price
     PASSIVE_FLAG = 1
 };
 
@@ -473,6 +476,29 @@ struct LiquidityPoolEntry
     body;
 };
 
+enum ContractCodeType {
+    CONTRACT_CODE_WASM = 0
+};
+
+struct ContractCodeEntry {
+    AccountID owner;
+    int64 contractID;
+    union switch (ContractCodeType type)
+    {
+    case CONTRACT_CODE_WASM:
+        WASMCode wasm;
+    } body;
+};
+
+%struct SCVal;
+
+struct ContractDataEntry {
+    AccountID owner;
+    int64 contractID;
+    SCVal *key;
+    SCVal *val;
+};
+
 struct LedgerEntryExtensionV1
 {
     SponsorshipDescriptor sponsoringID;
@@ -503,6 +529,10 @@ struct LedgerEntry
         ClaimableBalanceEntry claimableBalance;
     case LIQUIDITY_POOL:
         LiquidityPoolEntry liquidityPool;
+    case CONTRACT_CODE:
+        ContractCodeEntry contractCode;
+    case CONTRACT_DATA:
+        ContractDataEntry contractData;
     }
     data;
 
@@ -557,6 +587,19 @@ case LIQUIDITY_POOL:
     {
         PoolID liquidityPoolID;
     } liquidityPool;
+case CONTRACT_CODE:
+    struct
+    {
+        AccountID owner;
+        int64 contractID;
+    } contractCode;
+case CONTRACT_DATA:
+    struct
+    {
+        AccountID owner;
+        int64 contractID;
+        SCVal *key;
+    } contractData;
 };
 
 // list of all envelope types used in the application

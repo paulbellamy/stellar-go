@@ -9,6 +9,7 @@ namespace :xdr do
   # repo, and should be able to improve this integration.
   HAYASHI_XDR = [
                   "src/xdr/Stellar-SCP.x",
+                  "src/xdr/Stellar-contract.x",
                   "src/xdr/Stellar-ledger-entries.x",
                   "src/xdr/Stellar-ledger.x",
                   "src/xdr/Stellar-overlay.x",

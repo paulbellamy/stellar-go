@@ -3,6 +3,7 @@
 #   TAG=my-registry.example.com/keystore:dev make keystore
 XDRS = xdr/Stellar-SCP.x \
 xdr/Stellar-ledger-entries.x \
+xdr/Stellar-contract.x \
 xdr/Stellar-ledger.x \
 xdr/Stellar-overlay.x \
 xdr/Stellar-transaction.x \
