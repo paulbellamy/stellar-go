@@ -31,7 +31,7 @@ func main() {
 	networkPassphrase := flag.String("network-passphrase", network.TestNetworkPassphrase, "network passphrase")
 	start := flag.Int("start", -1, "ledger to start at (default: earliest)")
 	end := flag.Int("end", -1, "ledger to end at (default: latest)")
-	modules := flag.String("modules", "accounts,transactions", "comma-separated list of modules to index (default: all)")
+	modules := flag.String("modules", "accounts,contracts,transactions", "comma-separated list of modules to index (default: all)")
 	flag.Parse()
 
 	log.SetLevel(log.InfoLevel)
@@ -119,6 +119,15 @@ func main() {
 						)
 					}
 
+					if strings.Contains(*modules, "contracts") {
+						// TODO: Add contract key indexes
+						// contractId := "contract"
+						// key := "key"
+						// err = indexStore.AddParticipantsToIndexes(checkpoint, fmt.Sprintf("contract_%s_%s", contractId, key), []string{owner})
+						// if err != nil {
+						// 	return err
+						// }
+					}
 
 					if strings.Contains(*modules, "accounts") {
 						allParticipants, err := participantsForOperations(tx, false)

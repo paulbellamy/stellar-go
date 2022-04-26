@@ -44,6 +44,7 @@ func main() {
 	archiveWrapper := archive.Wrapper{Archive: ledgerBackend, Passphrase: *networkPassphrase}
 	http.HandleFunc("/operations", actions.Operations(archiveWrapper, indexStore))
 	http.HandleFunc("/transactions", actions.Transactions(archiveWrapper, indexStore))
+	http.HandleFunc("/contracts", actions.Contracts(archiveWrapper, indexStore))
 
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
