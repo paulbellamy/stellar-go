@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"io"
@@ -120,13 +121,20 @@ func main() {
 					}
 
 					if strings.Contains(*modules, "contracts") {
-						// TODO: Add contract key indexes
-						// contractId := "contract"
-						// key := "key"
-						// err = indexStore.AddParticipantsToIndexes(checkpoint, fmt.Sprintf("contract_%s_%s", contractId, key), []string{owner})
-						// if err != nil {
-						// 	return err
-						// }
+						contractWrites, err := contractsForOperations(tx)
+						if err != nil {
+							return err
+						}
+						for owner, contract := range contractWrites {
+							for contractId, keys := range contract {
+								for _, key := range keys {
+									err = indexStore.AddParticipantsToIndexes(checkpoint, fmt.Sprintf("contract_%s_%s", contractId, key), []string{owner})
+									if err != nil {
+										return err
+									}
+								}
+							}
+						}
 					}
 
 					if strings.Contains(*modules, "accounts") {
@@ -303,6 +311,11 @@ func participantsForOperations(transaction ingest.LedgerTransaction, onlyPayment
 			// the only direct participant is the source_account
 		case xdr.OperationTypeLiquidityPoolWithdraw:
 			// the only direct participant is the source_account
+		case xdr.OperationTypeManageContract:
+			// the only direct participant is the source_account
+		case xdr.OperationTypeInvokeContract:
+			// the only direct participant is the source_account
+			// TODO: and the contract owner
 		default:
 			return nil, fmt.Errorf("unknown operation type: %s", operation.Body.Type)
 		}
@@ -335,4 +348,41 @@ func getLedgerKeyParticipants(ledgerKey xdr.LedgerKey) []string {
 		result = append(result, ledgerKey.TrustLine.AccountId.Address())
 	}
 	return result
+}
+
+func contractsForOperations(transaction ingest.LedgerTransaction) (map[string]map[int64][]string, error) {
+	participants := map[string]map[int64][]string{}
+
+	for _, operation := range transaction.Envelope.Operations() {
+		opSource := operation.SourceAccount
+		if opSource == nil {
+			txSource := transaction.Envelope.SourceAccount()
+			opSource = &txSource
+		}
+
+		switch operation.Body.Type {
+		// TODO: Do we need to handle OperationTypeManageContract here?
+		case xdr.OperationTypeInvokeContract:
+			// TODO: Is this right? probably not? Should be in the result?
+			for _, key := range operation.Body.MustInvokeContractOp().WriteSet {
+				data := key.MustContractData()
+				owner := data.Owner.Address()
+				id := int64(data.ContractId)
+				keyBytes, err := data.Key.MarshalBinary()
+				if err != nil {
+					return nil, err
+				}
+				key := base64.StdEncoding.EncodeToString(keyBytes)
+				// find contract keys changed
+				o, ok := participants[owner]
+				if !ok {
+					o = map[int64][]string{}
+					participants[owner] = o
+				}
+				o[id] = append(o[id], key)
+			}
+		}
+	}
+
+	return participants, nil
 }
