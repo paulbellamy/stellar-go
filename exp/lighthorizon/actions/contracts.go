@@ -15,6 +15,7 @@ import (
 	hProtocol "github.com/stellar/go/protocols/horizon"
 	"github.com/stellar/go/support/render/hal"
 	"github.com/stellar/go/toid"
+	"github.com/stellar/go/xdr"
 )
 
 func Contracts(archiveWrapper archive.Wrapper, indexStore index.Store) func(http.ResponseWriter, *http.Request) {
@@ -116,34 +117,47 @@ func Contracts(archiveWrapper archive.Wrapper, indexStore index.Store) func(http
 			return
 		}
 
-		// TODO: Populate with the contract data here
 		for _, txn := range txns {
 			// Find the one that modifies this contract data key
-			matches := false
-			for _, changedKey := range txn.ChangedContractDataKeys() {
-				changedKeyXdr, err := changedKey.ContractData.Key.MarshalBinary()
+			for _, change := range txn.Changes {
+				if change.Type != xdr.LedgerEntryTypeContractData {
+					continue
+				}
+
+				var entry *xdr.ContractDataEntry
+				if change.Pre != nil {
+					entry = change.Pre.Data.ContractData
+				} else if change.Post != nil {
+					entry = change.Post.Data.ContractData
+				}
+				if entry == nil {
+					panic("invalid ledger entry change")
+				}
+
+				if entry.Owner.Address() != owner {
+					continue
+				}
+				if fmt.Sprint(entry.ContractId) != id {
+					continue
+				}
+				keyXdr, err := entry.Key.MarshalBinary()
 				if err != nil {
 					fmt.Fprintf(w, "Error: %v", err)
 					return
 				}
-				changedKeyBase64 := base64.StdEncoding.EncodeToString(changedKeyXdr)
-				if changedKeyBase64 == key {
-					matches = true
-					break
+				if base64.StdEncoding.EncodeToString(keyXdr) != key {
+					continue
 				}
-			}
-			if !matches {
-				continue
-			}
 
-			var response hProtocol.Transaction
-			response, err = adapters.PopulateTransaction(r, &txn)
-			if err != nil {
-				fmt.Fprintf(w, "Error: %v", err)
-				return
+				// relevant! add it.
+				var response hProtocol.ContractDataEntry
+				response, err = adapters.PopulateContractDataEntry(r, entry)
+				if err != nil {
+					fmt.Fprintf(w, "Error: %v", err)
+					return
+				}
+				page.Add(response)
 			}
-
-			page.Add(response)
 		}
 
 		page.PopulateLinks()
