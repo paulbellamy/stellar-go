@@ -128,7 +128,7 @@ func main() {
 						for owner, contract := range contractWrites {
 							for contractId, keys := range contract {
 								for _, key := range keys {
-									err = indexStore.AddParticipantsToIndexes(checkpoint, fmt.Sprintf("contract_%s_%s", contractId, key), []string{owner})
+									err = indexStore.AddParticipantsToIndexes(checkpoint, fmt.Sprintf("contract_%d_%s", contractId, key), []string{owner})
 									if err != nil {
 										return err
 									}
@@ -181,21 +181,21 @@ func main() {
 						}
 					}
 				}
-			}
 
-			nprocessed := atomic.AddUint64(&processed, 1)
+				nprocessed := atomic.AddUint64(&processed, 1)
 
-			if nprocessed%100 == 0 {
-				log.Infof(
-					"Reading checkpoints... - %.2f%% - elapsed: %s, remaining: %s",
-					(float64(nprocessed)/float64(all))*100,
-					time.Since(startTime).Round(1*time.Second),
-					(time.Duration(int64(time.Since(startTime))*int64(all)/int64(nprocessed)) - time.Since(startTime)).Round(1*time.Second),
-				)
+				if nprocessed%6400 == 0 {
+					log.Infof(
+						"Reading ledgers... - %.2f%% - elapsed: %s, remaining: %s",
+						(float64(nprocessed)/float64(all))*100,
+						time.Since(startTime).Round(1*time.Second),
+						(time.Duration(int64(time.Since(startTime))*int64(all)/int64(nprocessed)) - time.Since(startTime)).Round(1*time.Second),
+					)
 
-				// Clear indexes to save memory
-				if err := indexStore.Flush(); err != nil {
-					return err
+					// Clear indexes to save memory
+					if err := indexStore.Flush(); err != nil {
+						return err
+					}
 				}
 			}
 			return nil

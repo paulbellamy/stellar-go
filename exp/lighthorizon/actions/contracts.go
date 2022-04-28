@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -107,8 +108,9 @@ func Contracts(archiveWrapper archive.Wrapper, indexStore index.Store) func(http
 		}
 		cursor = toid.New(ledger, 1, 1).ToInt64()
 
-		// TODO: Keep fetching transactions until we hit limit or pass the last
-		txns, err := archiveWrapper.GetTransactions(cursor, limit)
+		// TODO: Keep fetching transactions until we hit limit or pass the last.
+		// 64*200 is max txns in a checkpoint. total hack for now.
+		txns, err := archiveWrapper.GetTransactions(cursor, limit*64*200)
 		if err != nil {
 			fmt.Fprintf(w, "Error: %v", err)
 			return
@@ -116,14 +118,24 @@ func Contracts(archiveWrapper archive.Wrapper, indexStore index.Store) func(http
 
 		// TODO: Populate with the contract data here
 		for _, txn := range txns {
-			hash, err := txn.TransactionHash()
-			if err != nil {
-				fmt.Fprintf(w, "Error: %v", err)
-				return
+			// Find the one that modifies this contract data key
+			matches := false
+			for _, changedKey := range txn.ChangedContractDataKeys() {
+				changedKeyXdr, err := changedKey.ContractData.Key.MarshalBinary()
+				if err != nil {
+					fmt.Fprintf(w, "Error: %v", err)
+					return
+				}
+				changedKeyBase64 := base64.StdEncoding.EncodeToString(changedKeyXdr)
+				if changedKeyBase64 == key {
+					matches = true
+					break
+				}
 			}
-			if id != "" && hash != id {
+			if !matches {
 				continue
 			}
+
 			var response hProtocol.Transaction
 			response, err = adapters.PopulateTransaction(r, &txn)
 			if err != nil {

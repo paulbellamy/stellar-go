@@ -24,6 +24,7 @@ const checkpointsToLookup = 1
 // Archive here only has the methods we care about, to make caching/wrapping easier
 type Archive interface {
 	GetLedger(ctx context.Context, sequence uint32) (xdr.LedgerCloseMeta, error)
+	GetLatestLedgerSequence(ctx context.Context) (sequence uint32, err error)
 }
 
 type Wrapper struct {
@@ -114,8 +115,16 @@ func (a *Wrapper) GetTransactions(cursor int64, limit int64) ([]common.Transacti
 	appending := false
 
 	ctx := context.Background()
+	latestSeq, err := a.GetLatestLedgerSequence(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	for {
+		if ledgerSequence > latestSeq {
+			return txns, nil
+		}
+
 		log.Debugf("Checking ledger %d", ledgerSequence)
 		ledger, err := a.GetLedger(ctx, ledgerSequence)
 		if err != nil {
@@ -147,12 +156,17 @@ func (a *Wrapper) GetTransactions(cursor int64, limit int64) ([]common.Transacti
 			}
 
 			if appending {
+				changes, err := tx.GetChanges()
+				if err != nil {
+					return nil, err
+				}
 				txns = append(txns, common.Transaction{
 					TransactionEnvelope: &tx.Envelope,
 					TransactionResult:   &tx.Result.Result,
 					// TODO: Use a method to get the header
 					LedgerHeader: &ledger.V0.LedgerHeader.Header,
 					TxIndex:      int32(transactionOrder),
+					Changes:      changes,
 				})
 			}
 
