@@ -17,11 +17,15 @@ func PopulateContractDataEntry(r *http.Request, entry *xdr.ContractDataEntry) (p
 	}
 	key := base64.URLEncoding.EncodeToString(keyXdr)
 
-	valueXdr, err := entry.Val.MarshalBinary()
-	if err != nil {
-		return protocol.ContractDataEntry{}, err
+	var value *string
+	if entry.Val != nil {
+		valueXdr, err := entry.Val.MarshalBinary()
+		if err != nil {
+			return protocol.ContractDataEntry{}, err
+		}
+		valueStr := base64.URLEncoding.EncodeToString(valueXdr)
+		value = &valueStr
 	}
-	value := base64.URLEncoding.EncodeToString(valueXdr)
 
 	base := protocol.ContractDataEntry{
 		Owner:      entry.Owner.Address(),

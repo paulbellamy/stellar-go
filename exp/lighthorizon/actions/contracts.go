@@ -125,10 +125,10 @@ func Contracts(archiveWrapper archive.Wrapper, indexStore index.Store) func(http
 				}
 
 				var entry *xdr.ContractDataEntry
-				if change.Pre != nil {
-					entry = change.Pre.Data.ContractData
-				} else if change.Post != nil {
+				if change.Post != nil {
 					entry = change.Post.Data.ContractData
+				} else if change.Pre != nil {
+					entry = change.Pre.Data.ContractData
 				}
 				if entry == nil {
 					panic("invalid ledger entry change")
@@ -150,8 +150,18 @@ func Contracts(archiveWrapper archive.Wrapper, indexStore index.Store) func(http
 				}
 
 				// relevant! add it.
+				var val *xdr.ScVal
+				if change.Post != nil {
+					val = change.Post.Data.ContractData.Val
+				}
+
 				var response hProtocol.ContractDataEntry
-				response, err = adapters.PopulateContractDataEntry(r, entry)
+				response, err = adapters.PopulateContractDataEntry(r, &xdr.ContractDataEntry{
+					Owner:      entry.Owner,
+					ContractId: entry.ContractId,
+					Key:        entry.Key,
+					Val:        val,
+				})
 				if err != nil {
 					fmt.Fprintf(w, "Error: %v", err)
 					return
