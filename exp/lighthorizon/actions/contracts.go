@@ -145,7 +145,7 @@ func Contracts(archiveWrapper archive.Wrapper, indexStore index.Store) func(http
 					fmt.Fprintf(w, "Error: %v", err)
 					return
 				}
-				if base64.StdEncoding.EncodeToString(keyXdr) != key {
+				if base64.URLEncoding.EncodeToString(keyXdr) != key {
 					continue
 				}
 

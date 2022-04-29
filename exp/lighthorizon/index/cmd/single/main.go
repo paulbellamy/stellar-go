@@ -372,7 +372,7 @@ func contractsForOperations(transaction ingest.LedgerTransaction) (map[string]ma
 				if err != nil {
 					return nil, err
 				}
-				key := base64.StdEncoding.EncodeToString(keyBytes)
+				key := base64.URLEncoding.EncodeToString(keyBytes)
 				// find contract keys changed
 				o, ok := participants[owner]
 				if !ok {
