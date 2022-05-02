@@ -82,92 +82,103 @@ func Contracts(archiveWrapper archive.Wrapper, indexStore index.Store) func(http
 			return
 		}
 
-		// Skip the cursor ahead to the next active checkpoint for this account
-		// TODO: do this in reverse order to fetch the latest change
-		checkpoint, err := indexStore.NextActive(owner, fmt.Sprintf("contract_%s_%s", id, key), uint32(toid.Parse(cursor).LedgerSequence/64))
-		if err == io.EOF {
-			// never active. No results.
-			page.PopulateLinks()
+	LoadTxns:
+		for {
+			// Skip the cursor ahead to the next active checkpoint for this account
+			// TODO: do this in reverse order to fetch the latest change
+			checkpoint, err := indexStore.NextActive(owner, fmt.Sprintf("contract_%s_%s", id, key), uint32(toid.Parse(cursor).LedgerSequence/64))
+			if err == io.EOF {
+				// never active. No results.
+				page.PopulateLinks()
 
-			encoder := json.NewEncoder(w)
-			encoder.SetIndent("", "  ")
-			err = encoder.Encode(page)
+				encoder := json.NewEncoder(w)
+				encoder.SetIndent("", "  ")
+				err = encoder.Encode(page)
+				if err != nil {
+					fmt.Fprintf(w, "Error: %v", err)
+					return
+				}
+				return
+			} else if err != nil {
+				fmt.Fprintf(w, "Error: %v", err)
+				return
+			}
+			ledger := int32(checkpoint * 64)
+			if ledger < 0 {
+				// Check we don't overflow going from uint32 -> int32
+				fmt.Fprintf(w, "Error: Ledger overflow")
+				return
+			}
+			cursor = toid.New(ledger, 1, 1).ToInt64()
+
+			// TODO: Keep fetching transactions until we hit limit or pass the last.
+			// 64*200 is max txns in a checkpoint. total hack for now.
+			txns, err := archiveWrapper.GetTransactions(cursor, limit*64*200)
 			if err != nil {
 				fmt.Fprintf(w, "Error: %v", err)
 				return
 			}
-			return
-		} else if err != nil {
-			fmt.Fprintf(w, "Error: %v", err)
-			return
-		}
-		ledger := int32(checkpoint * 64)
-		if ledger < 0 {
-			// Check we don't overflow going from uint32 -> int32
-			fmt.Fprintf(w, "Error: Ledger overflow")
-			return
-		}
-		cursor = toid.New(ledger, 1, 1).ToInt64()
-
-		// TODO: Keep fetching transactions until we hit limit or pass the last.
-		// 64*200 is max txns in a checkpoint. total hack for now.
-		txns, err := archiveWrapper.GetTransactions(cursor, limit*64*200)
-		if err != nil {
-			fmt.Fprintf(w, "Error: %v", err)
-			return
-		}
-
-		for _, txn := range txns {
-			// Find the one that modifies this contract data key
-			for _, change := range txn.Changes {
-				if change.Type != xdr.LedgerEntryTypeContractData {
-					continue
-				}
-
-				var entry *xdr.ContractDataEntry
-				if change.Post != nil {
-					entry = change.Post.Data.ContractData
-				} else if change.Pre != nil {
-					entry = change.Pre.Data.ContractData
-				}
-				if entry == nil {
-					panic("invalid ledger entry change")
-				}
-
-				if entry.Owner.Address() != owner {
-					continue
-				}
-				if fmt.Sprint(entry.ContractId) != id {
-					continue
-				}
-				keyXdr, err := entry.Key.MarshalBinary()
-				if err != nil {
-					fmt.Fprintf(w, "Error: %v", err)
-					return
-				}
-				if base64.URLEncoding.EncodeToString(keyXdr) != key {
-					continue
-				}
-
-				// relevant! add it.
-				var val *xdr.ScVal
-				if change.Post != nil {
-					val = change.Post.Data.ContractData.Val
-				}
-
-				var response hProtocol.ContractDataEntry
-				response, err = adapters.PopulateContractDataEntry(r, &xdr.ContractDataEntry{
-					Owner:      entry.Owner,
-					ContractId: entry.ContractId,
-					Key:        entry.Key,
-					Val:        val,
-				})
-				if err != nil {
-					fmt.Fprintf(w, "Error: %v", err)
-					return
-				}
-				page.Add(response)
+			if len(txns) == 0 {
+				// Must be done?
+				break
 			}
+
+			for _, txn := range txns {
+				// Find the one that modifies this contract data key
+				for _, change := range txn.Changes {
+					if change.Type != xdr.LedgerEntryTypeContractData {
+						continue
+					}
+
+					var entry *xdr.ContractDataEntry
+					if change.Post != nil {
+						entry = change.Post.Data.ContractData
+					} else if change.Pre != nil {
+						entry = change.Pre.Data.ContractData
+					}
+					if entry == nil {
+						panic("invalid ledger entry change")
+					}
+
+					if entry.Owner.Address() != owner {
+						continue
+					}
+					if fmt.Sprint(entry.ContractId) != id {
+						continue
+					}
+					keyXdr, err := entry.Key.MarshalBinary()
+					if err != nil {
+						fmt.Fprintf(w, "Error: %v", err)
+						return
+					}
+					if base64.URLEncoding.EncodeToString(keyXdr) != key {
+						continue
+					}
+
+					// relevant! add it.
+					var val *xdr.ScVal
+					if change.Post != nil {
+						val = change.Post.Data.ContractData.Val
+					}
+
+					var response hProtocol.ContractDataEntry
+					response, err = adapters.PopulateContractDataEntry(r, &xdr.ContractDataEntry{
+						Owner:      entry.Owner,
+						ContractId: entry.ContractId,
+						Key:        entry.Key,
+						Val:        val,
+					})
+					if err != nil {
+						fmt.Fprintf(w, "Error: %v", err)
+						return
+					}
+					page.Add(response)
+					if int64(len(page.Embedded.Records)) >= limit {
+						break LoadTxns
+					}
+				}
+			}
+			cursor = toid.New(ledger+64, 1, 1).ToInt64()
 		}
 
 		page.PopulateLinks()
